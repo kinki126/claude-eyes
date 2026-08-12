@@ -62,6 +62,21 @@
 }
 ```
 
+> **省钱技巧（智谱免费为主 + 付费兜底）**：免费模型平时不花钱，但高峰常被限流（HTTP 429）。把它设为主提供商、付费版设为备选，免费被限流时自动切付费，既省钱又稳：
+> ```jsonc
+> {
+>   "base_url": "https://open.bigmodel.cn/api/paas/v4",
+>   "api_key": "你的key",
+>   "model": "glm-4.6v-flash",          // 主=免费 flash（不收费）
+>   "chat_path": "/chat/completions",
+>   "providers": [
+>     { "name": "free-flash", "base_url": "https://open.bigmodel.cn/api/paas/v4", "api_key": "你的key", "model": "glm-4.6v-flash" },
+>     { "name": "paid-46v",  "base_url": "https://open.bigmodel.cn/api/paas/v4", "api_key": "你的key", "model": "glm-4.6v" }
+>   ]
+> }
+> ```
+> 免费被限流时会自动回退到付费版；`meta.provider` 会标明实际用的是哪个。
+
 ## 换提供商（零代码）
 
 本系统只依赖 **OpenAI 兼容的 chat/completions + vision（image_url base64）** 接口。切换提供商只需改配置：
