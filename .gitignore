@@ -1,0 +1,18 @@
+# ---- 密钥与本地配置（严禁提交） ----
+vision-config.json
+.env
+
+# ---- 生成的机器相关配置（由 setup.mjs 生成） ----
+.mcp.json
+.claude/settings.local.json
+
+# ---- 截图 / 日志 / 依赖 ----
+shots/
+logs/
+node_modules/
+mcp-image-analyzer/node_modules/
+
+# ---- 系统 / 编辑器 ----
+Thumbs.db
+Desktop.ini
+.DS_Store
