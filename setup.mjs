@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // ============================================================
-// setup.mjs —— 图像分析系统 一键安装 / 配置向导（内部版）
+// setup.mjs —— 图像分析系统 一键安装 / 配置向导
 //
 // 用法：
-//   node setup.mjs                交互式（有终端时）
+//   node setup.mjs                项目级安装（默认）：只在当前文件夹生效
+//   node setup.mjs --user-level   用户级安装：任何 Claude 项目都能用
 //   node setup.mjs --yes          非交互（跳过提问，用环境变量）
 //   环境变量：VISION_API_KEY      视觉模型密钥（--yes 或非 TTY 时用）
 //            VISION_BASE_URL/VISION_MODEL/VISION_CHAT_PATH   （可选，覆盖提供商）
@@ -13,7 +14,7 @@
 //   1) 检查 Node 版本、必备文件
 //   2) 配置 vision-config.json（密钥，交互提问或读 VISION_API_KEY）
 //   3) 两处 npm install（桥接依赖、MCP 依赖）
-//   4) 生成 .mcp.json（绝对路径，供 Claude Code 加载 MCP）
+//   4) 项目级：生成 .mcp.json；用户级：注册 MCP 到 -s user + 安装 skill 到 ~/.claude/skills
 //   5) 自检：启动桥接 → 探测 /health → 关掉
 //   6) 打印下一步
 // 全部路径由本脚本所在目录推导，不写死用户路径，可整体搬迁。
@@ -32,6 +33,7 @@ const BASE_DIR = __dirname;                       // 项目根（本文件所在
 const MCP_DIR = path.join(BASE_DIR, 'mcp-image-analyzer');
 const BRIDGE_SCRIPT = path.join(BASE_DIR, 'zhipu-bridge-api.js');
 const NON_INTERACTIVE = process.argv.includes('--yes') || !process.stdin.isTTY;
+const USER_LEVEL = process.argv.includes('--user-level');
 
 const c = {
     green: (s) => `\x1b[32m${s}\x1b[0m`,
@@ -89,8 +91,9 @@ async function ensureVisionConfig() {
 function npmInstall(cwdDir, label) {
     step(`安装依赖: ${label}`);
     if (!fs.existsSync(path.join(cwdDir, 'package.json'))) { warn(`缺少 package.json: ${cwdDir}（跳过）`); return false; }
-    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-    const r = spawnSync(npmCmd, ['install', '--no-audit', '--no-fund'], { cwd: cwdDir, stdio: 'inherit' });
+    // Windows 上直接 spawn npm.cmd 会 EINVAL，须经 shell 执行（shell:true；参数固定安全）
+    const r = spawnSync('npm', ['install', '--no-audit', '--no-fund'],
+        { cwd: cwdDir, stdio: 'inherit', shell: process.platform === 'win32' });
     if (r.status !== 0) { fail(`npm install 失败: ${label}`); process.exit(1); }
     ok(`依赖就绪: ${label}`);
     return true;
@@ -117,6 +120,59 @@ function writeMcpJson() {
     fs.writeFileSync(out, JSON.stringify(mcpJson, null, 2) + '\n');
     ok(`已生成 .mcp.json（MCP_USER=${mcpUser}）`);
     return out;
+}
+
+// ---------- 用户级安装（--user-level） ----------
+function runClaude(args, capture = false) {
+    // claude 可能是 .exe 或 .cmd；Windows 上一律经 shell 执行最稳（参数固定安全）
+    const opts = { shell: process.platform === 'win32' };
+    if (capture) opts.stdio = 'pipe';
+    else opts.stdio = 'inherit';
+    return spawnSync('claude', args, opts);
+}
+
+function installUserLevelMcp() {
+    step('用户级安装: 注册 MCP（对所有 Claude 项目生效）');
+    const mcpUser = process.env.MCP_USER || os.userInfo().username;
+    const mcpIndex = path.join(MCP_DIR, 'index.js');
+    const bridgePosix = BRIDGE_SCRIPT.replace(/\\/g, '/');
+    const r = runClaude([
+        'mcp', 'add', 'image-analyzer', '-s', 'user',
+        '-e', 'BRIDGE_BASE_URL=http://127.0.0.1:8765',
+        '-e', `BRIDGE_SCRIPT_PATH=${bridgePosix}`,
+        '-e', 'AUTO_SPAWN_BRIDGE=1',
+        '-e', `MCP_USER=${mcpUser}`,
+        '--', 'node', mcpIndex
+    ], true);
+    const out = `${r.stdout || ''} ${r.stderr || ''}`;
+    // 幂等：已存在不算失败
+    if (r.status !== 0 && !/already exists/i.test(out)) {
+        warn('claude mcp add 失败——请确认 claude 命令可用，或手动按 docs/USAGE.md 操作');
+        return false;
+    }
+    ok('MCP 已注册到用户级（已存在则复用）');
+    return true;
+}
+
+function installUserLevelSkill() {
+    step('用户级安装: 安装 analyze-image skill');
+    const src = path.join(BASE_DIR, '.claude', 'skills', 'analyze-image', 'SKILL.md');
+    if (!fs.existsSync(src)) { warn(`项目 skill 不存在: ${src}（跳过）`); return false; }
+    const base = BASE_DIR.replace(/\\/g, '/');
+    let s = fs.readFileSync(src, 'utf8');
+    // 相对命令改成绝对路径；顶部提示行改为"任意项目可用"
+    s = s
+        .replace(/> 提示：本 skill 里所有脚本命令都[^\n]*/,
+            `> 提示：本 skill 为**用户级**安装，任意 Claude 项目可用；辅助脚本在 <安装目录>（${base}），图片落盘到当前项目 shots\\`)
+        .replace(/node extract-pasted-image\.mjs/g, `node ${base}/extract-pasted-image.mjs`)
+        .replace(/node latest-shot\.mjs/g, `node ${base}/latest-shot.mjs`)
+        .replace(/node zhipu-bridge-api\.js/g, `node ${base}/zhipu-bridge-api.js`);
+    const outDir = path.join(os.homedir(), '.claude', 'skills', 'analyze-image');
+    fs.mkdirSync(outDir, { recursive: true });
+    const out = path.join(outDir, 'SKILL.md');
+    fs.writeFileSync(out, s);
+    ok(`已安装用户级 skill: ${out}`);
+    return true;
 }
 
 function healthCheck() {
@@ -149,29 +205,37 @@ async function selfCheckBridge() {
     return okNow;
 }
 
-console.log(c.cyan(`\n图像分析系统 一键安装向导\n${'='.repeat(36)}`));
+console.log(c.cyan(`\n图像分析系统 一键安装向导${USER_LEVEL ? '（用户级）' : '（项目级）'}\n${'='.repeat(36)}`));
 ok(`安装目录: ${BASE_DIR}`);
-const nodeMajor = verifyNodeVersion();
+verifyNodeVersion();
 
 const cfg = await ensureVisionConfig();
 
 npmInstall(BASE_DIR, '桥接依赖');
 npmInstall(MCP_DIR, 'MCP 依赖');
 
-const mcpJsonPath = writeMcpJson();
+let mcpNote;
+if (USER_LEVEL) {
+    installUserLevelMcp();
+    installUserLevelSkill();
+    mcpNote = '已注册到用户级（所有项目可用），未生成项目级 .mcp.json';
+} else {
+    mcpNote = writeMcpJson();
+}
 await selfCheckBridge();
 
 // 汇总
 step('完成');
 ok(`配置文件: ${path.join(BASE_DIR, 'vision-config.json')}${cfg.api_key ? '' : c.red('（api_key 为空！）')}`);
-ok(`MCP 注册: ${mcpJsonPath}`);
+ok(`MCP 注册: ${mcpNote}`);
 ok(`桥接脚本: ${BRIDGE_SCRIPT}`);
 console.log(`
 ${c.green('下一步')}
   1. 确保桥接在运行: node zhipu-bridge-api.js（或在配置后首次调用时自动拉起）
-  2. 重启 Claude Code（${c.cyan('Ctrl+C 退出后重新启动')}），使 .mcp.json 生效
-  3. /mcp 确认 image-analyzer ✓ 后即可使用
-  4. 三种用法:
+  2. 重启 Claude Code（${c.cyan('Ctrl+C 退出后重新启动')}）
+     - 项目级安装: 在 ${c.cyan('当前文件夹')} 启动，/mcp 确认 image-analyzer ✓
+     - 用户级安装: 在 ${c.cyan('任意项目')} 启动，/mcp 确认 image-analyzer ✓
+  3. 三种用法:
      - 面板粘贴: Ctrl+V 图片 → 回车（自动分析）
      - 截图: Win+Shift+S（开自动保存）→ 说"分析最新一张截图"
      - 路径: 说"分析 <图片绝对路径>"

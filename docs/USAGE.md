@@ -80,8 +80,15 @@
 
 ## 在任意 Claude 项目中使用（用户级安装）
 
-默认情况下，claude-eyes 的 `.mcp.json` 与 skill 是**项目级**的，只在 claude-eyes 自己那个文件夹里生效。如果你希望**任何项目**（如 Vue3 项目）里都能分析图片，做一次"用户级安装"：
+默认情况下，claude-eyes 的 `.mcp.json` 与 skill 是**项目级**的，只在 claude-eyes 自己那个文件夹里生效。如果你希望**任何项目**（如 Vue3 项目）里都能分析图片，做一次"用户级安装"。
 
+**最简单（推荐）：一条命令**
+```bash
+node setup.mjs --user-level
+```
+它会自动：注册 MCP 到用户级（`claude mcp add -s user`）+ 安装 skill 到 `~/.claude/skills/`（脚本路径自动填成绝对路径）。
+
+**手动方式（等价）**
 ```bash
 # 1. 把 MCP 工具注册到用户级（对所有项目生效）
 claude mcp add image-analyzer -s user \
