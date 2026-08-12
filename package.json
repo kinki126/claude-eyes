@@ -1,7 +1,16 @@
 {
-  "name": "claude-code-vision-bridge",
-  "version": "2.0.0",
-  "description": "让 Claude Code（无视觉后端）通过函数调用分析本地截图：MCP 工具 + 视觉模型桥接，自动决定停/续。",
+  "name": "claude-eyes",
+  "version": "1.0.0",
+  "description": "Give Claude Code eyes — analyze local screenshots via an MCP tool + vision LLM bridge, with automatic continue/stop control.",
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "vision",
+    "screenshot",
+    "image-analysis",
+    "llm",
+    "bridge"
+  ],
   "license": "MIT",
   "private": false,
   "engines": {
@@ -10,9 +19,18 @@
   "scripts": {
     "setup": "node setup.mjs",
     "start": "node zhipu-bridge-api.js",
-    "smoke": "node mcp-image-analyzer/test/mcp-smoke.mjs",
-    "smoke:remote": "node mcp-image-analyzer/test/server-http-smoke.mjs"
+    "test": "node --test",
+    "smoke": "node mcp-image-analyzer/smoke/mcp-smoke.mjs",
+    "smoke:remote": "node mcp-image-analyzer/smoke/server-http-smoke.mjs"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kinki126/claude-eyes.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kinki126/claude-eyes/issues"
+  },
+  "homepage": "https://github.com/kinki126/claude-eyes#readme",
   "dependencies": {
     "axios": "^1.19.0",
     "sharp": "^0.35.3"

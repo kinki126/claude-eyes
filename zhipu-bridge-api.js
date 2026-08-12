@@ -29,7 +29,7 @@ const RATE_LIMIT_PER_MIN = Number(process.env.RATE_LIMIT_PER_MIN || 0); // 0=不
 const RATE_LIMIT_PER_DAY = Number(process.env.RATE_LIMIT_PER_DAY || 0); // 0=不限
 const USAGE_LOG = process.env.USAGE_LOG !== '0';
 const LOG_DIR = process.env.LOG_DIR || path.join(__dirname, 'logs');
-const VERSION = '2.0.0';
+const VERSION = '1.0.0';
 const [PRIMARY_CFG] = loadConfig(); // 仅用于 /health 展示
 // ============================================================
 
