@@ -3,8 +3,9 @@
 // setup.mjs —— 图像分析系统 一键安装 / 配置向导
 //
 // 用法：
-//   node setup.mjs                项目级安装（默认）：只在当前文件夹生效
-//   node setup.mjs --user-level   用户级安装：任何 Claude 项目都能用
+//   node setup.mjs                用户级安装（默认）：任何 Claude 项目都能用
+//   node setup.mjs --project-level  项目级安装：只在当前文件夹生效
+//   node setup.mjs --user-level   显式指定用户级（等价默认）
 //   node setup.mjs --yes          非交互（跳过提问，用环境变量）
 //   环境变量：VISION_API_KEY      视觉模型密钥（--yes 或非 TTY 时用）
 //            VISION_BASE_URL/VISION_MODEL/VISION_CHAT_PATH   （可选，覆盖提供商）
@@ -33,7 +34,9 @@ const BASE_DIR = __dirname;                       // 项目根（本文件所在
 const MCP_DIR = path.join(BASE_DIR, 'mcp-image-analyzer');
 const BRIDGE_SCRIPT = path.join(BASE_DIR, 'zhipu-bridge-api.js');
 const NON_INTERACTIVE = process.argv.includes('--yes') || !process.stdin.isTTY;
-const USER_LEVEL = process.argv.includes('--user-level');
+// 默认用户级安装；显式 --project-level 切回仅当前文件夹生效
+const PROJECT_LEVEL = process.argv.includes('--project-level');
+const USER_LEVEL = !PROJECT_LEVEL;
 
 const c = {
     green: (s) => `\x1b[32m${s}\x1b[0m`,
@@ -205,7 +208,7 @@ async function selfCheckBridge() {
     return okNow;
 }
 
-console.log(c.cyan(`\n图像分析系统 一键安装向导${USER_LEVEL ? '（用户级）' : '（项目级）'}\n${'='.repeat(36)}`));
+console.log(c.cyan(`\n图像分析系统 一键安装向导${USER_LEVEL ? '（用户级·默认）' : '（项目级）'}\n${'='.repeat(36)}`));
 ok(`安装目录: ${BASE_DIR}`);
 verifyNodeVersion();
 
@@ -233,8 +236,9 @@ console.log(`
 ${c.green('下一步')}
   1. 确保桥接在运行: node zhipu-bridge-api.js（或在配置后首次调用时自动拉起）
   2. 重启 Claude Code（${c.cyan('Ctrl+C 退出后重新启动')}）
-     - 项目级安装: 在 ${c.cyan('当前文件夹')} 启动，/mcp 确认 image-analyzer ✓
-     - 用户级安装: 在 ${c.cyan('任意项目')} 启动，/mcp 确认 image-analyzer ✓
+     - ${USER_LEVEL
+        ? `本次为用户级安装: 在 ${c.cyan('任意项目')} 启动，/mcp 确认 image-analyzer ✓`
+        : `本次为项目级安装: 在 ${c.cyan('当前文件夹')} 启动，/mcp 确认 image-analyzer ✓`}
   3. 三种用法:
      - 面板粘贴: Ctrl+V 图片 → 回车（自动分析）
      - 截图: Win+Shift+S（开自动保存）→ 说"分析最新一张截图"
