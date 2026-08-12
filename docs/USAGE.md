@@ -77,3 +77,24 @@
 | 报"未找到图片" | 截图保存到 `<项目根>\shots` 或系统截图目录后再试 |
 | 被限流（HTTP 429） | 稍等片刻；管理员可调 `RATE_LIMIT_PER_MIN` |
 | `api_key` 为空分析失败 | `node setup.mjs --reset-key` 重新配置 |
+
+## 在任意 Claude 项目中使用（用户级安装）
+
+默认情况下，claude-eyes 的 `.mcp.json` 与 skill 是**项目级**的，只在 claude-eyes 自己那个文件夹里生效。如果你希望**任何项目**（如 Vue3 项目）里都能分析图片，做一次"用户级安装"：
+
+```bash
+# 1. 把 MCP 工具注册到用户级（对所有项目生效）
+claude mcp add image-analyzer -s user \
+  -e BRIDGE_BASE_URL=http://127.0.0.1:8765 \
+  -e BRIDGE_SCRIPT_PATH="E:/temp/zhipu-bridge-api.js" \
+  -e AUTO_SPAWN_BRIDGE=1 \
+  -e MCP_USER=<你的标识> \
+  -- node "E:/temp/mcp-image-analyzer/index.js"
+
+# 2. 把 analyze-image skill 复制到用户级，并把里面的脚本路径改成 claude-eyes 的绝对路径
+#    （本仓库 .claude/skills/analyze-image/SKILL.md 即模板）
+```
+
+装好后，**重启 Claude**，在任何项目目录里启动都能直接粘贴图片 / 说"分析最新一张截图"。
+
+> 注意：若项目根已存在 `.mcp.json`（含同名 server），会与用户级冲突——保留一个、删除另一个即可（`claude mcp remove image-analyzer -s user` 或删项目 `.mcp.json`）。
