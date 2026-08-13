@@ -25,6 +25,9 @@ node setup.mjs
 
 > 换 key：重新运行 `node setup.mjs --reset-key`。
 
+> **可选：装到固定目录（之后解压文件夹可以删）**
+> `node setup.mjs --install`（默认装到 `~\.claude\claude-eyes`，可用 `--dir <路径>` 指定）。装完即可删除下载解压的文件夹，功能不受影响；更新时重新下载 zip 再跑一次 `--install`。
+
 ## 开始使用
 
 **重启 Claude Code**（在项目根启动，让 MCP 生效）→ 输入 `/mcp` 应看到 `image-analyzer ✓`。

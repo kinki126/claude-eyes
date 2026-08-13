@@ -6,6 +6,8 @@
 //   node setup.mjs                用户级安装（默认）：任何 Claude 项目都能用
 //   node setup.mjs --project-level  项目级安装：只在当前文件夹生效
 //   node setup.mjs --user-level   显式指定用户级（等价默认）
+//   node setup.mjs --install      安装到固定目录（默认 ~/.claude/claude-eyes），解压目录可删
+//   node setup.mjs --install --dir <路径>   指定安装目录（或 INSTALL_DIR 环境变量）
 //   node setup.mjs --yes          非交互（跳过提问，用环境变量）
 //   环境变量：VISION_API_KEY      视觉模型密钥（--yes 或非 TTY 时用）
 //            VISION_BASE_URL/VISION_MODEL/VISION_CHAT_PATH   （可选，覆盖提供商）
@@ -37,6 +39,7 @@ const NON_INTERACTIVE = process.argv.includes('--yes') || !process.stdin.isTTY;
 // 默认用户级安装；显式 --project-level 切回仅当前文件夹生效
 const PROJECT_LEVEL = process.argv.includes('--project-level');
 const USER_LEVEL = !PROJECT_LEVEL;
+const INSTALL = process.argv.includes('--install');
 
 const c = {
     green: (s) => `\x1b[32m${s}\x1b[0m`,
@@ -139,6 +142,9 @@ function installUserLevelMcp() {
     const mcpUser = process.env.MCP_USER || os.userInfo().username;
     const mcpIndex = path.join(MCP_DIR, 'index.js');
     const bridgePosix = BRIDGE_SCRIPT.replace(/\\/g, '/');
+    // 先移除旧的同名注册，再添加——claude mcp add 对"已存在的同名 server"不会更新路径，
+    // 不先删会导致 --install 后 MCP 仍指向旧位置。
+    runClaude(['mcp', 'remove', 'image-analyzer', '-s', 'user']);
     const r = runClaude([
         'mcp', 'add', 'image-analyzer', '-s', 'user',
         '-e', 'BRIDGE_BASE_URL=http://127.0.0.1:8765',
@@ -153,7 +159,7 @@ function installUserLevelMcp() {
         warn('claude mcp add 失败——请确认 claude 命令可用，或手动按 docs/USAGE.md 操作');
         return false;
     }
-    ok('MCP 已注册到用户级（已存在则复用）');
+    ok('MCP 已注册到用户级（先删后加，确保指向当前目录）');
     return true;
 }
 
@@ -175,6 +181,74 @@ function installUserLevelSkill() {
     const out = path.join(outDir, 'SKILL.md');
     fs.writeFileSync(out, s);
     ok(`已安装用户级 skill: ${out}`);
+    return true;
+}
+
+// ---------- 安装到固定目录（--install） ----------
+function argValue(flag) {
+    const i = process.argv.indexOf(flag);
+    return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
+}
+
+function resolveInstallDir() {
+    const given = argValue('--dir') || process.env.INSTALL_DIR || '';
+    return given ? path.resolve(given) : path.join(os.homedir(), '.claude', 'claude-eyes');
+}
+
+function installToPermanent() {
+    const installDir = resolveInstallDir();
+    if (path.resolve(installDir) === path.resolve(BASE_DIR)) {
+        warn('安装目录就是当前目录——无需复制，直接原地做用户级安装');
+        return; // 走常规流程
+    }
+    step(`安装到固定目录: ${installDir}`);
+    fs.mkdirSync(installDir, { recursive: true });
+
+    // 更新场景：清掉旧内容，但保留"带 key 的 vision-config.json"
+    const cfgInInstall = path.join(installDir, 'vision-config.json');
+    let keepKey = false;
+    try {
+        const c = JSON.parse(fs.readFileSync(cfgInInstall, 'utf8'));
+        keepKey = !!(c.api_key);
+    } catch { keepKey = false; }
+    for (const entry of fs.readdirSync(installDir)) {
+        if (entry === 'vision-config.json' && keepKey) continue;
+        fs.rmSync(path.join(installDir, entry), { recursive: true, force: true });
+    }
+
+    // 复制源码（排除依赖/运行垃圾/项目级注册/密钥）
+    const EXCLUDE = new Set(['node_modules', 'shots', 'logs', '.git', '.mcp.json', 'vision-config.json']);
+    fs.cpSync(BASE_DIR, installDir, {
+        recursive: true,
+        filter: (src) => {
+            const rel = path.relative(BASE_DIR, src);
+            if (!rel) return true; // 根目录本身
+            return !rel.split(path.sep).some((p) => EXCLUDE.has(p));
+        }
+    });
+    // 密钥：安装目录没有带 key 的，就从源带过去
+    if (!keepKey && fs.existsSync(path.join(BASE_DIR, 'vision-config.json'))) {
+        fs.copyFileSync(path.join(BASE_DIR, 'vision-config.json'), cfgInInstall);
+        ok('已携带密钥配置到安装目录');
+    }
+    ok(`文件已复制: ${BASE_DIR} → ${installDir}`);
+
+    // 在安装目录里跑标准用户级 setup（npm install / 注册 MCP / 装 skill / 自检）
+    step('在安装目录中运行用户级 setup...');
+    const child = spawnSync(process.execPath, [path.join(installDir, 'setup.mjs'), '--user-level'], {
+        cwd: installDir,
+        stdio: 'inherit',
+        env: { ...process.env }
+    });
+    if (child.status !== 0) {
+        fail(`安装目录中的 setup 执行失败（exit ${child.status}）`);
+        process.exit(1);
+    }
+
+    console.log(`\n${c.green('✅ 安装完成')}`);
+    console.log(`  固定安装目录: ${installDir}`);
+    console.log(`  用户级 MCP/skill 已指向它。现在可以 ${c.yellow('删除原始解压目录')} 了。`);
+    console.log(`  更新方式: 重新下载 zip → 解压 → 再跑 node setup.mjs --install`);
     return true;
 }
 
@@ -208,9 +282,14 @@ async function selfCheckBridge() {
     return okNow;
 }
 
-console.log(c.cyan(`\n图像分析系统 一键安装向导${USER_LEVEL ? '（用户级·默认）' : '（项目级）'}\n${'='.repeat(36)}`));
-ok(`安装目录: ${BASE_DIR}`);
+console.log(c.cyan(`\n图像分析系统 一键安装向导${INSTALL ? '（安装到固定目录）' : (USER_LEVEL ? '（用户级·默认）' : '（项目级）')}\n${'='.repeat(36)}`));
+ok(`当前目录: ${BASE_DIR}`);
 verifyNodeVersion();
+
+if (INSTALL) {
+    installToPermanent();
+    process.exit(0);
+}
 
 const cfg = await ensureVisionConfig();
 

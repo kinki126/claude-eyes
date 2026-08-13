@@ -51,6 +51,7 @@ node server-http.js
 1. 打包整个项目（含 `mcp-image-analyzer\node_modules`），做成 zip。
 2. 员工机装 Node ≥ 18，解压后运行 `node setup.mjs` 填自己的 key（或由公司统一注入 `VISION_API_KEY`）。
 3. 员工本地跑 `node zhipu-bridge-api.js`（或依赖 MCP 自动拉起）。
+4. **（推荐）装到固定目录**：`node setup.mjs --install`（默认 `~\.claude\claude-eyes`，可 `--dir` 指定）。装完后**解压文件夹可以删除**；更新 = 重新下载 zip 再跑一次 `--install`。
 
 ## 分发注意事项（重要）
 
