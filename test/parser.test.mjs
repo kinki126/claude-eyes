@@ -87,13 +87,13 @@ test('垃圾输入 → keywords 空数组', () => {
     assert.deepEqual(r.keywords, []);
 });
 
-test('带 boxed_text 的 JSON → 转录出框内文字', () => {
-    const r = extractAnalysis(JSON.stringify({ analysis: '红色框内是报错', boxed_text: 'TypeError: Cannot read property of null', next_action: 'continue', reason: 'r' }));
-    assert.equal(r.boxedText, 'TypeError: Cannot read property of null');
+test('带 annotated_text 的 JSON → 转录出标注文字', () => {
+    const r = extractAnalysis(JSON.stringify({ analysis: '红框内是报错', annotated_text: 'TypeError: Cannot read property of null', next_action: 'continue', reason: 'r' }));
+    assert.equal(r.annotatedText, 'TypeError: Cannot read property of null');
     assert.equal(r.status, 'ok');
 });
 
-test('无 boxed_text → 空字符串', () => {
+test('无 annotated_text → 空字符串', () => {
     const r = extractAnalysis(JSON.stringify({ analysis: 'x', next_action: 'stop' }));
-    assert.equal(r.boxedText, '');
+    assert.equal(r.annotatedText, '');
 });

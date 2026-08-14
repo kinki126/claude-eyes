@@ -104,7 +104,7 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
                 image: body.image || (body.images && body.images[0]),
                 analysis: body.analysis.text || body.analysis.raw || '(模型未返回分析内容)',
                 keywords: body.analysis.keywords || [],
-                boxed_text: body.analysis.boxed_text || '',
+                annotated_text: body.analysis.annotated_text || '',
                 control: body.control,
                 meta: {
                     model: body.meta.model,
