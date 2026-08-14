@@ -35,6 +35,11 @@ const [PRIMARY_CFG] = loadConfig(); // 仅用于 /health 展示
 
 // ---------- 提示词模板（扩展点 G：任务类型 + 语言） ----------
 const PROMPT_TAIL = `
+重点区域（最高优先级）：如果截图中有用户框选/高亮/圈注的区域（如红色框、红圈、箭头、黄色高亮），那是用户最关注的区域。请：
+- 优先、仔细阅读该区域内的所有文字，并一字不差地完整转录到 "boxed_text" 字段（尤其报错信息、错误码、代码、按钮文案）。
+- 用一句话在 analysis 里说明该区域在图中的大致位置。
+- 分析该区域展示的是什么错误/状态/问题。
+
 根据分析结果，自主决定本次分析流程是否应该结束：
 - 若截图明确显示任务成功、流程已完成、内容已分析完毕、或用户明确表示结束 → next_action 输出 "stop"。
 - 否则 → next_action 输出 "continue"，表示可继续等待下一张截图。
@@ -42,6 +47,7 @@ const PROMPT_TAIL = `
 请严格只输出一个 JSON 对象，不要输出任何多余文字、解释、Markdown 代码块标记。格式：
 {
   "analysis": "完整详细的截图内容分析（全部文字、报错、界面）",
+  "boxed_text": "框选/高亮区域内文字的逐字转录（截图无框选区域则为空字符串）",
   "keywords": ["从截图提取的、可用于代码检索的关键词，如报错函数名/错误码/文件名/接口路径等，最多 10 个"],
   "next_action": "continue 或 stop",
   "reason": "一句话说明继续或停止的原因"
@@ -108,17 +114,18 @@ function extractAnalysis(content) {
         const keywords = Array.isArray(parsed.keywords)
             ? parsed.keywords.map(String).slice(0, 10)
             : [];
-        return { raw, analysis: String(parsed.analysis ?? '').trim(), action, reason, keywords, status };
+        const boxedText = String(parsed.boxed_text ?? '').trim();
+        return { raw, analysis: String(parsed.analysis ?? '').trim(), action, reason, keywords, boxedText, status };
     }
 
     // 5. 正则回退：从散文里抠 next_action
     const m = raw.match(/["']?next_action["']?\s*[:：]\s*["']?(continue|stop)["']?/i);
     if (m) {
-        return { raw, analysis: raw.trim(), action: m[1].toLowerCase(), reason: '（通过正则回退提取）', keywords: [], status: 'fallback' };
+        return { raw, analysis: raw.trim(), action: m[1].toLowerCase(), reason: '（通过正则回退提取）', keywords: [], boxedText: '', status: 'fallback' };
     }
 
     // 6. 兜底：默认 continue（误判 stop 会错误终止流程，更糟）
-    return { raw, analysis: raw.trim(), action: 'continue', reason: '模型输出无法解析，默认继续', keywords: [], status: 'failed' };
+    return { raw, analysis: raw.trim(), action: 'continue', reason: '模型输出无法解析，默认继续', keywords: [], boxedText: '', status: 'failed' };
 }
 
 // ---------- 去重缓存（扩展点 E） ----------
@@ -291,7 +298,7 @@ const server = http.createServer(async (req, res) => {
             ok: true,
             images: imagesField,
             image: imgPaths.length === 1 ? imagesField[0] : undefined, // 单图兼容旧字段
-            analysis: { text: analysisRes.analysis, raw: analysisRes.raw, keywords: analysisRes.keywords || [] },
+            analysis: { text: analysisRes.analysis, raw: analysisRes.raw, keywords: analysisRes.keywords || [], boxed_text: analysisRes.boxedText || '' },
             control: {
                 action: analysisRes.action,
                 reason: analysisRes.reason,
