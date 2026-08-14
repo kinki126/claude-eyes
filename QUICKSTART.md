@@ -13,20 +13,20 @@
 在项目根目录打开终端，运行：
 
 ```bash
-node setup.mjs
+node setup.mjs --install
 ```
+
+（默认装到 `~\.claude\claude-eyes`，可用 `--dir <路径>` 指定。）这是**推荐安装方式**：装完后**下载解压的文件夹就可以删掉**，功能不受影响；更新时重新下载 zip 再跑一次 `--install`。
 
 向导会：
 - 检查 Node 版本
 - 让你输入**你自己的 API Key**（或先设环境变量 `VISION_API_KEY`）
 - 自动安装依赖（两处）
-- 生成 `.mcp.json` 注册 MCP 工具
+- 注册 MCP 工具到**用户级**（任意 Claude 项目可用）+ 安装 skill
 - 自检桥接服务
 
+> **只想先试试（不删解压文件夹）**：`node setup.mjs`（同样用户级，但配置留在当前文件夹）。
 > 换 key：重新运行 `node setup.mjs --reset-key`。
-
-> **可选：装到固定目录（之后解压文件夹可以删）**
-> `node setup.mjs --install`（默认装到 `~\.claude\claude-eyes`，可用 `--dir <路径>` 指定）。装完即可删除下载解压的文件夹，功能不受影响；更新时重新下载 zip 再跑一次 `--install`。
 
 ## 开始使用
 
