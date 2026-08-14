@@ -1,6 +1,6 @@
 {
   "name": "mcp-image-analyzer",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "MCP server exposing analyze_image — Claude Code vision bridge client.",
   "type": "module",
   "private": true,

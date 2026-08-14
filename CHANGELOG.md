@@ -2,6 +2,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.2.1] - 2026-08-14
+
+### 修复
+
+- MCP 连接超时从 30s 调大到 120s，避免被 claude-mem 等插件的同步启动 hook 拖成 CONNECT_TIMEOUT
+- 自检桥接失败时打印桥接的真实报错（原为笼统提示，无法定位缺依赖/端口占用等原因）
+
 ## [1.2.0] - 2026-08-14
 
 ### 新增

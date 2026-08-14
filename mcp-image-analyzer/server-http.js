@@ -37,7 +37,7 @@ const TOOL_SCHEMA = {
 
 /** 每个会话一个独立的 McpServer（Protocol 单 transport 限制） */
 function createMcpServer() {
-    const srv = new McpServer({ name: 'mcp-image-analyzer', version: '1.2.0' });
+    const srv = new McpServer({ name: 'mcp-image-analyzer', version: '1.2.1' });
     srv.tool('analyze_image', TOOL_DESCRIPTION, TOOL_SCHEMA, createAnalyzeImageHandler({ user: 'remote' }));
     return srv;
 }
