@@ -76,6 +76,23 @@ test('桥接离线冒烟（/health、force_action、错误路径）', async () =
             try { fs.rmSync(img, { force: true }); } catch { /* ignore */ }
         }
 
+        // 多图：2 张 → images 数组、image_count=2（上面 finally 已删 img，这里重建）
+        const img2 = path.join(projectRoot, 'shots', '.ci-dummy2.png');
+        fs.mkdirSync(path.dirname(img2), { recursive: true });
+        fs.writeFileSync(img, 'dummy-image-bytes');
+        fs.writeFileSync(img2, 'dummy-image-bytes-2');
+        try {
+            const r = await httpGet(`http://127.0.0.1:${PORT}/analyze?paths=${encodeURIComponent(img)}&paths=${encodeURIComponent(img2)}&force_action=continue`);
+            assert.equal(r.status, 200);
+            const j = JSON.parse(r.body);
+            assert.equal(j.ok, true);
+            assert.equal(j.images.length, 2);
+            assert.equal(j.meta.image_count, 2);
+            assert.equal(j.control.action, 'continue');
+        } finally {
+            try { fs.rmSync(img2, { force: true }); } catch { /* ignore */ }
+        }
+
         // 不存在的文件 → 400
         const bad = await httpGet(`http://127.0.0.1:${PORT}/analyze?path=${encodeURIComponent(path.join(projectRoot, 'no-such-file.png'))}`);
         assert.equal(bad.status, 400);

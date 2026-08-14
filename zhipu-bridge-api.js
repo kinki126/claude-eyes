@@ -42,6 +42,7 @@ const PROMPT_TAIL = `
 请严格只输出一个 JSON 对象，不要输出任何多余文字、解释、Markdown 代码块标记。格式：
 {
   "analysis": "完整详细的截图内容分析（全部文字、报错、界面）",
+  "keywords": ["从截图提取的、可用于代码检索的关键词，如报错函数名/错误码/文件名/接口路径等，最多 10 个"],
   "next_action": "continue 或 stop",
   "reason": "一句话说明继续或停止的原因"
 }`;
@@ -50,7 +51,8 @@ const PROMPT_TEMPLATES = {
     general: (lang) => `你是一个专业的截图分析助手。请仔细分析用户提供的截图，提取全部文字、报错信息、按钮与界面元素、操作状态等，力求完整准确。${langPrompt(lang)}`,
     error: (lang) => `你是一个专业的报错定位助手。请仔细分析用户提供的截图，重点提取：错误类型、报错文字/堆栈、错误码、错误触发条件、涉及的文件或接口、以及修复思路。${langPrompt(lang)}`,
     ui: (lang) => `你是一个专业的界面走查助手。请仔细分析用户提供的截图，提取：界面元素、布局结构、文案内容、操作状态（加载/成功/失败/禁用）、可点击区域与交互提示。${langPrompt(lang)}`,
-    ocr: (lang) => `你是一个专业的 OCR 助手。请完整提取截图中的所有文字内容，按视觉顺序排列，尽量保留原始排版。${langPrompt(lang)}`
+    ocr: (lang) => `你是一个专业的 OCR 助手。请完整提取截图中的所有文字内容，按视觉顺序排列，尽量保留原始排版。${langPrompt(lang)}`,
+    diff: (lang) => `你是一个专业的界面/截图对比助手。请先分别描述用户提供的每一张截图的内容，再重点对比各截图之间的差异（新增、删除、变化的部分），从界面元素、文案、状态等角度列出。${langPrompt(lang)}`
 };
 
 function langPrompt(lang) {
@@ -103,17 +105,20 @@ function extractAnalysis(content) {
     if (parsed && typeof parsed === 'object' && parsed !== null) {
         const action = String(parsed.next_action ?? '').trim().toLowerCase() === 'stop' ? 'stop' : 'continue';
         const reason = String(parsed.reason ?? '').trim();
-        return { raw, analysis: String(parsed.analysis ?? '').trim(), action, reason, status };
+        const keywords = Array.isArray(parsed.keywords)
+            ? parsed.keywords.map(String).slice(0, 10)
+            : [];
+        return { raw, analysis: String(parsed.analysis ?? '').trim(), action, reason, keywords, status };
     }
 
     // 5. 正则回退：从散文里抠 next_action
     const m = raw.match(/["']?next_action["']?\s*[:：]\s*["']?(continue|stop)["']?/i);
     if (m) {
-        return { raw, analysis: raw.trim(), action: m[1].toLowerCase(), reason: '（通过正则回退提取）', status: 'fallback' };
+        return { raw, analysis: raw.trim(), action: m[1].toLowerCase(), reason: '（通过正则回退提取）', keywords: [], status: 'fallback' };
     }
 
     // 6. 兜底：默认 continue（误判 stop 会错误终止流程，更糟）
-    return { raw, analysis: raw.trim(), action: 'continue', reason: '模型输出无法解析，默认继续', status: 'failed' };
+    return { raw, analysis: raw.trim(), action: 'continue', reason: '模型输出无法解析，默认继续', keywords: [], status: 'failed' };
 }
 
 // ---------- 去重缓存（扩展点 E） ----------
@@ -198,7 +203,6 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        const imgPath = urlObj.searchParams.get('path');
         const task = urlObj.searchParams.get('task') || 'general';
         const lang = urlObj.searchParams.get('lang') || 'zh';
         const desc = urlObj.searchParams.get('desc') || '';
@@ -206,14 +210,24 @@ const server = http.createServer(async (req, res) => {
         const forceAction = urlObj.searchParams.get('force_action');
         const raw = urlObj.searchParams.get('raw') === '1';
 
-        if (!imgPath) {
+        // 图片路径：优先 paths 数组（多图），其次单 path
+        let imgPaths = urlObj.searchParams.getAll('paths').map((p) => p.trim()).filter(Boolean);
+        const singlePath = urlObj.searchParams.get('path');
+        if (imgPaths.length === 0 && singlePath) imgPaths = [singlePath];
+        if (imgPaths.length === 0) {
             res.writeHead(400);
-            res.end(JSON.stringify({ ok: false, error: '缺少path参数，示例：/analyze?path=E:\\temp\\test.png' }));
+            res.end(JSON.stringify({ ok: false, error: '缺少path参数，示例：/analyze?path=E:\\temp\\test.png（多图：&paths=图1&paths=图2）' }));
             return;
         }
-        if (!fs.existsSync(imgPath)) {
+        if (imgPaths.length > 6) {
             res.writeHead(400);
-            res.end(JSON.stringify({ ok: false, error: `文件不存在: ${imgPath}` }));
+            res.end(JSON.stringify({ ok: false, error: '一次最多分析 6 张图' }));
+            return;
+        }
+        const missing = imgPaths.filter((p) => !fs.existsSync(p));
+        if (missing.length) {
+            res.writeHead(400);
+            res.end(JSON.stringify({ ok: false, error: `文件不存在: ${missing.join(' | ')}` }));
             return;
         }
 
@@ -225,11 +239,12 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        const rawBuf = fs.readFileSync(imgPath);
-        const md5 = crypto.createHash('md5').update(rawBuf).digest('hex');
+        const rawBufs = imgPaths.map((p) => fs.readFileSync(p));
+        const imgMd5s = rawBufs.map((b) => crypto.createHash('md5').update(b).digest('hex'));
+        const mergedMd5 = crypto.createHash('md5').update(Buffer.concat(rawBufs)).digest('hex');
 
         let analysisRes, provider = null, modelUsed = null, usage = null, cacheHit = 'miss', upstreamRaw = null;
-        const cacheKey = `${md5}|${task}|${lang}|${PRIMARY_CFG.model}`;
+        const cacheKey = `${mergedMd5}|${task}|${lang}|${PRIMARY_CFG.model}`;
 
         const cached = !forceAction && !raw ? cacheGet(cacheKey) : null;
         if (cached) {
@@ -238,19 +253,22 @@ const server = http.createServer(async (req, res) => {
         } else if (forceAction === 'continue' || forceAction === 'stop') {
             analysisRes = {
                 raw: '',
-                analysis: `（测试钩子 force_action=${forceAction}）`,
+                analysis: `（测试钩子 force_action=${forceAction}，${imgPaths.length} 张图）`,
                 action: forceAction,
                 reason: 'force_action 测试钩子',
                 status: 'ok'
             };
         } else {
-            const compressedBuf = await sharp(rawBuf)
-                .resize({ width: MAX_LONG_SIDE, height: MAX_LONG_SIDE, fit: 'inside', withoutEnlargement: true })
-                .toFormat('png')
-                .toBuffer();
-            const base64 = compressedBuf.toString('base64');
+            const base64Images = [];
+            for (const rawBuf of rawBufs) {
+                const compressedBuf = await sharp(rawBuf)
+                    .resize({ width: MAX_LONG_SIDE, height: MAX_LONG_SIDE, fit: 'inside', withoutEnlargement: true })
+                    .toFormat('png')
+                    .toBuffer();
+                base64Images.push(compressedBuf.toString('base64'));
+            }
             const prompt = buildPrompt(task, lang, desc);
-            const up = await analyzeImage({ base64Png: base64, prompt });
+            const up = await analyzeImage({ base64Images, prompt });
             provider = up.provider; modelUsed = up.model; usage = up.usage;
             upstreamRaw = up.content;
             analysisRes = extractAnalysis(up.content);
@@ -265,10 +283,15 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        const imagesField = imgPaths.map((p, i) => ({
+            path: p, md5: imgMd5s[i], bytes: rawBufs[i].length, compressed_bytes: null
+        }));
+
         const body = {
             ok: true,
-            image: { path: imgPath, md5, bytes: rawBuf.length, compressed_bytes: null },
-            analysis: { text: analysisRes.analysis, raw: analysisRes.raw },
+            images: imagesField,
+            image: imgPaths.length === 1 ? imagesField[0] : undefined, // 单图兼容旧字段
+            analysis: { text: analysisRes.analysis, raw: analysisRes.raw, keywords: analysisRes.keywords || [] },
             control: {
                 action: analysisRes.action,
                 reason: analysisRes.reason,
@@ -281,6 +304,7 @@ const server = http.createServer(async (req, res) => {
                 task, lang,
                 parse: analysisRes.status,
                 cache: cacheHit,
+                image_count: imgPaths.length,
                 latency_ms: Date.now() - start,
                 forced: !!forceAction,
                 bridge_version: VERSION
@@ -288,7 +312,7 @@ const server = http.createServer(async (req, res) => {
         };
 
         usageLog({
-            user, md5, task, lang,
+            user, md5: mergedMd5, image_count: imgPaths.length, task, lang,
             provider: provider || null, model: modelUsed || PRIMARY_CFG.model,
             usage, action: analysisRes.action, cache: cacheHit,
             latency_ms: body.meta.latency_ms, status: 200

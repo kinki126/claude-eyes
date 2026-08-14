@@ -94,6 +94,8 @@ VISION_BASE_URL=https://api.openai.com/v1 VISION_MODEL=gpt-4o VISION_API_KEY=sk-
 ```bash
 curl 'http://127.0.0.1:8765/health'                                 # 健康检查
 curl 'http://127.0.0.1:8765/analyze?path=E:\temp\shot.png'          # 分析
+curl 'http://127.0.0.1:8765/analyze?paths=图1.png&paths=图2.png'     # 多图一起分析（最多 6 张）
+curl 'http://127.0.0.1:8765/analyze?paths=a.png&paths=b.png&task=diff' # 多图差异对比
 curl 'http://127.0.0.1:8765/analyze?path=...&task=error&lang=en'    # 报错模板 + 英文
 curl 'http://127.0.0.1:8765/analyze?path=...&force_action=stop'     # 确定性"停"（测试钩子）
 curl 'http://127.0.0.1:8765/analyze?path=...&raw=1'                 # 原始模型输出

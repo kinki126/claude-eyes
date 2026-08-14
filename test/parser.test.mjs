@@ -70,3 +70,19 @@ test('空/undefined 输入 → failed 且不抛异常', () => {
     const r2 = extractAnalysis(null);
     assert.equal(r2.status, 'failed');
 });
+
+test('带 keywords 的 JSON → 解析出关键词数组', () => {
+    const r = extractAnalysis(JSON.stringify({ analysis: '报错', keywords: ['handleClick', 'api/user', 'ERR_401'], next_action: 'continue', reason: 'r' }));
+    assert.deepEqual(r.keywords, ['handleClick', 'api/user', 'ERR_401']);
+    assert.equal(r.status, 'ok');
+});
+
+test('无 keywords → 空数组', () => {
+    const r = extractAnalysis(JSON.stringify({ analysis: 'x', next_action: 'stop' }));
+    assert.deepEqual(r.keywords, []);
+});
+
+test('垃圾输入 → keywords 空数组', () => {
+    const r = extractAnalysis('无法识别');
+    assert.deepEqual(r.keywords, []);
+});

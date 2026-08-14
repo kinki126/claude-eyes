@@ -8,6 +8,8 @@
 //   node setup.mjs --user-level   显式指定用户级（等价默认）
 //   node setup.mjs --install      安装到固定目录（默认 ~/.claude/claude-eyes），解压目录可删
 //   node setup.mjs --install --dir <路径>   指定安装目录（或 INSTALL_DIR 环境变量）
+//   node setup.mjs --update       更新（下载新 zip 解压到当前文件夹后跑本命令，等价重装）
+//   node setup.mjs --uninstall    卸载（移除用户级 MCP/skill + 删固定安装目录）
 //   node setup.mjs --yes          非交互（跳过提问，用环境变量）
 //   环境变量：VISION_API_KEY      视觉模型密钥（--yes 或非 TTY 时用）
 //            VISION_BASE_URL/VISION_MODEL/VISION_CHAT_PATH   （可选，覆盖提供商）
@@ -40,6 +42,8 @@ const NON_INTERACTIVE = process.argv.includes('--yes') || !process.stdin.isTTY;
 const PROJECT_LEVEL = process.argv.includes('--project-level');
 const USER_LEVEL = !PROJECT_LEVEL;
 const INSTALL = process.argv.includes('--install');
+const UPDATE = process.argv.includes('--update');
+const UNINSTALL = process.argv.includes('--uninstall');
 
 const c = {
     green: (s) => `\x1b[32m${s}\x1b[0m`,
@@ -248,7 +252,31 @@ function installToPermanent() {
     console.log(`\n${c.green('✅ 安装完成')}`);
     console.log(`  固定安装目录: ${installDir}`);
     console.log(`  用户级 MCP/skill 已指向它。现在可以 ${c.yellow('删除原始解压目录')} 了。`);
-    console.log(`  更新方式: 重新下载 zip → 解压 → 再跑 node setup.mjs --install`);
+    console.log(`  更新方式: 重新下载 zip → 解压 → 再跑 node setup.mjs --update`);
+    return true;
+}
+
+function uninstallAll() {
+    step('卸载: 移除用户级注册与固定安装');
+    // 1) 移除用户级 MCP 注册
+    runClaude(['mcp', 'remove', 'image-analyzer', '-s', 'user']);
+    ok('已移除用户级 MCP 注册');
+    // 2) 删用户级 skill
+    const skillDir = path.join(os.homedir(), '.claude', 'skills', 'analyze-image');
+    fs.rmSync(skillDir, { recursive: true, force: true });
+    ok(`已删除用户级 skill: ${skillDir}`);
+    // 3) 删固定安装目录（仅当不是当前工作目录，防误删）
+    const installDir = resolveInstallDir();
+    if (fs.existsSync(installDir) && path.resolve(installDir) !== path.resolve(BASE_DIR)) {
+        fs.rmSync(installDir, { recursive: true, force: true });
+        ok(`已删除固定安装目录: ${installDir}`);
+    } else if (path.resolve(installDir) === path.resolve(BASE_DIR)) {
+        warn('安装目录就是当前目录——未删除当前文件夹');
+    } else {
+        warn(`未发现固定安装目录: ${installDir}`);
+    }
+    console.log(`\n${c.green('✅ 已卸载')}`);
+    console.log('  如需删除当前项目文件夹,请手动删除。');
     return true;
 }
 
@@ -286,7 +314,11 @@ console.log(c.cyan(`\n图像分析系统 一键安装向导${INSTALL ? '（安�
 ok(`当前目录: ${BASE_DIR}`);
 verifyNodeVersion();
 
-if (INSTALL) {
+if (UNINSTALL) {
+    uninstallAll();
+    process.exit(0);
+}
+if (INSTALL || UPDATE) {
     installToPermanent();
     process.exit(0);
 }

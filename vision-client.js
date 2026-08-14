@@ -76,11 +76,20 @@ function isTransientError(err, status) {
 /**
  * 调用视觉模型，按序尝试主→备选提供商，瞬时错误自动切下一个。
  * @param {object} opts
- * @param {string} opts.base64Png   压缩后的 PNG base64
+ * @param {string[]} [opts.base64Images]  多张压缩后的 PNG base64（推荐）
+ * @param {string}   [opts.base64Png]     单张（兼容；内部并入 base64Images）
  * @param {string} opts.prompt      提示词（含任务模板与 JSON 输出要求）
  * @returns {Promise<{content:string, provider:string, model:string, usage:object|null}>}
  */
-async function analyzeImage({ base64Png, prompt, maxTokens = 2000, temperature = 0.2 }) {
+async function analyzeImage({ base64Images = [], base64Png, prompt, maxTokens = 2000, temperature = 0.2 }) {
+    const images = (Array.isArray(base64Images) && base64Images.length)
+        ? base64Images
+        : (base64Png ? [base64Png] : []);
+    if (!images.length) {
+        const e = new Error('没有可分析的图片');
+        throw e;
+    }
+
     const providers = loadConfig();
     const errors = [];
 
@@ -99,7 +108,10 @@ async function analyzeImage({ base64Png, prompt, maxTokens = 2000, temperature =
                         role: 'user',
                         content: [
                             { type: 'text', text: prompt },
-                            { type: 'image_url', image_url: { url: `data:image/png;base64,${base64Png}` } }
+                            ...images.map((b64) => ({
+                                type: 'image_url',
+                                image_url: { url: `data:image/png;base64,${b64}` }
+                            }))
                         ]
                     }
                 ]

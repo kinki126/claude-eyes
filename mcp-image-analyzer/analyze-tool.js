@@ -66,9 +66,10 @@ export async function ensureBridge() {
  * @param {string} [opts.user]          兜底用户标识（远程由 userContext 覆盖）
  */
 export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, user = MCP_USER } = {}) {
-    return async ({ path, description, task, lang }) => {
-        if (!path) {
-            return { isError: true, content: [{ type: 'text', text: '缺少必填参数 path（本地图片绝对路径）。' }] };
+    return async ({ path, paths, description, task, lang }) => {
+        const imgList = (Array.isArray(paths) && paths.length) ? paths.slice(0, 6) : (path ? [path] : []);
+        if (imgList.length === 0) {
+            return { isError: true, content: [{ type: 'text', text: '缺少参数：请传 path（单张）或 paths（多张，最多 6 张，均为本地图片绝对路径）。' }] };
         }
 
         if (!(await ensureBridge())) {
@@ -81,7 +82,11 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
         try {
             // 拼 URL 一律走 URLSearchParams（自动编码 Windows 反斜杠/冒号）
             const qs = new URLSearchParams();
-            qs.set('path', path);
+            if (imgList.length === 1) {
+                qs.set('path', imgList[0]);
+            } else {
+                for (const p of imgList) qs.append('paths', p);
+            }
             if (description) qs.set('desc', description);
             qs.set('task', task || 'general');
             qs.set('lang', lang || 'zh');
@@ -95,14 +100,17 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
             }
 
             const out = {
-                image: { path: body.image.path },
+                images: body.images || (body.image ? [body.image] : []),
+                image: body.image || (body.images && body.images[0]),
                 analysis: body.analysis.text || body.analysis.raw || '(模型未返回分析内容)',
+                keywords: body.analysis.keywords || [],
                 control: body.control,
                 meta: {
                     model: body.meta.model,
                     provider: body.meta.provider,
                     parse: body.meta.parse,
                     cache: body.meta.cache,
+                    image_count: body.meta.image_count || imgList.length,
                     latency_ms: body.meta.latency_ms
                 }
             };
