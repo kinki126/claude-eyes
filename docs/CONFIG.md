@@ -98,7 +98,7 @@ node setup.mjs --provider ollama      # 本地 Ollama（llama3.2-vision 等）
 
 | 预设 | 模型 | 适合场景 | 备注 |
 |---|---|---|---|
-| `zhipu` | `glm-4.6v-flash`(免费) / `glm-4.6v`(付费) | 中文 UI/报错 OCR | 中文识别最强；免费版高峰有限流 |
+| `zhipu` | `glm-4.6v`(默认,付费) | 中文 UI/报错 OCR | 中文识别强；想省钱可手动改 `glm-4.6v-flash` |
 | `qwen` | `qwen-vl-max` | 截图转代码、GUI 理解 | 性价比优，截图→代码准确率高 |
 | `doubao` | `doubao-seed-evolving` | 推理 + 多模态、工具调用 | 固定模型 ID 持续进化；key 在火山方舟创建 |
 | `openai` | `gpt-4o` | 通用强视觉 | 需海外账号/网络 |

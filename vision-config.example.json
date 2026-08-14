@@ -1,8 +1,8 @@
 {
   "base_url": "https://open.bigmodel.cn/api/paas/v4",
   "api_key": "",
-  "model": "glm-4.6v-flash",
+  "model": "glm-4.6v",
   "chat_path": "/chat/completions",
   "providers": [],
-  "_comment": "默认免费模型 glm-4.6v-flash(不按 token 收费)。若需更稳定/更高精度:把 model 改回 glm-4.6v(付费);或按 docs/CONFIG.md 配置'免费为主+付费兜底'的多模型回退。"
+  "_comment": "默认模型 glm-4.6v（付费，稳定）。若想省钱：把 model 改为 glm-4.6v-flash（免费但不收费调，高峰可能限流），或按 docs/CONFIG.md 配置'免费为主+付费兜底'。"
 }

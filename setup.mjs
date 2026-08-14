@@ -56,7 +56,7 @@ try {
 
 // 视觉提供商预设（均为 OpenAI 兼容 chat/completions；模型 ID 可按当前官方文档调整，可用 VISION_* env 覆盖）
 const PROVIDER_PRESETS = {
-    zhipu:       { name: '智谱',                base_url: 'https://open.bigmodel.cn/api/paas/v4',                  model: 'glm-4.6v-flash',      chat_path: '/chat/completions' },
+    zhipu:       { name: '智谱',                base_url: 'https://open.bigmodel.cn/api/paas/v4',                  model: 'glm-4.6v',             chat_path: '/chat/completions' },
     qwen:        { name: '通义千问(阿里百炼)',     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',   model: 'qwen-vl-max',         chat_path: '/chat/completions' },
     doubao:      { name: '豆包(Doubao-Seed)',     base_url: 'https://ark.cn-beijing.volces.com/api/v3',             model: 'doubao-seed-evolving', chat_path: '/chat/completions' },
     openai:      { name: 'OpenAI',               base_url: 'https://api.openai.com/v1',                            model: 'gpt-4o',              chat_path: '/chat/completions' },
