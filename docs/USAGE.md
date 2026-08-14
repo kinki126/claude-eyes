@@ -110,7 +110,11 @@ claude mcp add image-analyzer -s user \
   -e MCP_USER=<你的标识> \
   -- node "E:/temp/mcp-image-analyzer/index.js"
 
-# 2. 把 analyze-image skill 复制到用户级，并把里面的脚本路径改成 claude-eyes 的绝对路径
+# 2. 手动加连接超时：claude mcp add 不支持 timeout 参数，直接编辑 ~/.claude.json，
+#    在 mcpServers.image-analyzer 里加 "timeout": 120000（毫秒）。
+#    否则 claude-mem 等插件的同步启动 hook 可能把默认 30s 超时拖成 CONNECT_TIMEOUT。
+
+# 3. 把 analyze-image skill 复制到用户级，并把里面的脚本路径改成 claude-eyes 的绝对路径
 #    （本仓库 .claude/skills/analyze-image/SKILL.md 即模板）
 ```
 
