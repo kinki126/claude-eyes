@@ -28,6 +28,16 @@ node setup.mjs --install
 > **只想先试试（不删解压文件夹）**：`node setup.mjs`（同样用户级，但配置留在当前文件夹）。
 > 换 key：重新运行 `node setup.mjs --reset-key`。
 
+## 升级
+
+| 你现在的状态 | 升级做法 |
+|---|---|
+| **新用户 / 装过固定目录** | 下载新 zip → 解压 → `node setup.mjs --install` |
+| **老用户(v1.00,就地装在解压文件夹)** | 下载新 zip → 解压到**新文件夹** → 在里面跑 `node setup.mjs --upgrade`(自动卸载旧版 → 装全新版)→ **删旧文件夹** |
+| **固定安装用户升级** | 下载新 zip → 解压 → `node setup.mjs --update` |
+
+> `--upgrade` 会打印版本过渡(`v旧 → v新`)、保留/备份密钥(`vision-config.json.bak`)。升级后旧解压文件夹可删。
+
 ## 开始使用
 
 **重启 Claude Code**（在项目根启动，让 MCP 生效）→ 输入 `/mcp` 应看到 `image-analyzer ✓`。

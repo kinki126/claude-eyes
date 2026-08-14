@@ -51,6 +51,8 @@ node setup.mjs   # default = user-level install (works in any project); add --pr
 
 See [`QUICKSTART.md`](QUICKSTART.md) for details.
 
+**Upgrade**: new/fixed-install users → `node setup.mjs --install` (or `--update`); old v1.00 in-place users → unzip the new version and run `node setup.mjs --upgrade` (auto uninstall old + fresh install). See the **Upgrade** section in [`QUICKSTART.md`](QUICKSTART.md).
+
 ## Usage
 
 | Way | Action |

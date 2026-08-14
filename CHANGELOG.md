@@ -2,6 +2,26 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.1.0] - 2026-08-14
+
+### 新增
+
+- **多图分析**:`analyze_image` 支持 `paths`(最多 6 张)一次分析;桥接 `images` 数组响应、合并缓存
+- **task=diff**:多图差异对比(分别描述每张,再列差异)
+- **keywords 输出 + 自动定位代码**:分析结果带可用于检索的关键词,skill 引导在当前项目 grep 到 `文件:行号`
+- **标注识别泛化**:识别所有非原图的用户附加标注(框选/高亮/圆圈/箭头/手写/批注等),逐字转录到 `annotated_text`
+- **`extract-pasted-image --count N`**:一次提取最近 N 张粘贴图
+- **全新升级体验**:
+  - `setup --upgrade`:一键"先卸载旧版,再安装全新版本"(老 v1.00 就地用户升级用)
+  - 版本跟踪:`installed-version`,升级时打印 `v旧 → v新`
+  - 配置备份:`vision-config.json.bak`
+  - `--install`(新用户唯一标准)/ `--update`(固定安装升级)/ `--uninstall`
+- **修复**:Windows 上 `fs.cpSync` 复制含 `.git` 的目录树原生崩溃(exit 127)→ 改手工递归复制
+
+### 文档
+
+- README / QUICKSTART / docs(DEPLOY/USAGE/CONFIG)增加「升级」说明(三类用户各自的升级路径)
+
 ## [1.0.0] - 2026-08-12
 
 初始公开发布。

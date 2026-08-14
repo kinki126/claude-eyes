@@ -53,6 +53,12 @@ node server-http.js
 3. 员工本地跑 `node zhipu-bridge-api.js`（或依赖 MCP 自动拉起）。
 4. **（推荐）装到固定目录**：`node setup.mjs --install`（默认 `~\.claude\claude-eyes`，可 `--dir` 指定）。装完后**解压文件夹可以删除**；更新 = 重新下载 zip 再跑一次 `--install`。
 
+### 升级
+
+- **新用户 / 固定安装**：下载新 zip → 解压 → `node setup.mjs --install`（或 `--update`）。
+- **老 v1.00 就地用户**（解压文件夹 + 就地 setup）：下载新 zip → 解压到**新文件夹** → 在里面跑 `node setup.mjs --upgrade`（自动：卸载旧版注册 → 安装全新版本）→ **删旧文件夹**。
+- `--upgrade`/`--install` 会打印版本过渡、保留并备份密钥（`vision-config.json.bak`）。
+
 ## 分发注意事项（重要）
 
 - **分发前删除 `vision-config.json`**——里面是分发者的密钥，否则同事会继承你的 key。

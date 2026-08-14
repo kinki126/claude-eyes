@@ -51,6 +51,8 @@ node setup.mjs   # 默认用户级安装:任意项目可用;只想本项目用�
 
 完整上手见 [`QUICKSTART.md`](QUICKSTART.md)。
 
+**升级**：新用户/固定安装 `node setup.mjs --install`（或 `--update`）；老 v1.00 就地用户下载新版解压后跑 `node setup.mjs --upgrade`（自动卸旧装新）。详见 [`QUICKSTART.md`](QUICKSTART.md)「升级」。
+
 ## 使用方式
 
 | 方式 | 操作 |

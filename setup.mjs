@@ -9,6 +9,7 @@
 //   node setup.mjs --install      安装到固定目录（默认 ~/.claude/claude-eyes），解压目录可删
 //   node setup.mjs --install --dir <路径>   指定安装目录（或 INSTALL_DIR 环境变量）
 //   node setup.mjs --update       更新（下载新 zip 解压到当前文件夹后跑本命令，等价重装）
+//   node setup.mjs --upgrade      一键升级（先卸载旧版注册，再安装全新版本；老 v1.00 就地用户用这个）
 //   node setup.mjs --uninstall    卸载（移除用户级 MCP/skill + 删固定安装目录）
 //   node setup.mjs --yes          非交互（跳过提问，用环境变量）
 //   环境变量：VISION_API_KEY      视觉模型密钥（--yes 或非 TTY 时用）
@@ -43,7 +44,14 @@ const PROJECT_LEVEL = process.argv.includes('--project-level');
 const USER_LEVEL = !PROJECT_LEVEL;
 const INSTALL = process.argv.includes('--install');
 const UPDATE = process.argv.includes('--update');
+const UPGRADE = process.argv.includes('--upgrade');
 const UNINSTALL = process.argv.includes('--uninstall');
+
+// 当前版本（用于版本跟踪 installed-version）
+let CURRENT_VERSION = '0.0.0';
+try {
+    CURRENT_VERSION = JSON.parse(fs.readFileSync(path.join(BASE_DIR, 'package.json'), 'utf8')).version || '0.0.0';
+} catch { /* 忽略 */ }
 
 const c = {
     green: (s) => `\x1b[32m${s}\x1b[0m`,
@@ -199,37 +207,60 @@ function resolveInstallDir() {
     return given ? path.resolve(given) : path.join(os.homedir(), '.claude', 'claude-eyes');
 }
 
+// 手工递归复制（不用 fs.cpSync：它在 Windows 上复制含 .git 的目录树会原生崩溃 exit 127）
+function copyTree(src, dst, exclusions) {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const name of fs.readdirSync(src)) {
+        const ss = path.join(src, name);
+        const rel = path.relative(src, ss);
+        if (rel.split(path.sep).some((p) => exclusions.has(p))) continue;
+        const dd = path.join(dst, name);
+        const st = fs.statSync(ss);
+        if (st.isDirectory()) copyTree(ss, dd, exclusions);
+        else fs.copyFileSync(ss, dd);
+    }
+}
+
 function installToPermanent() {
     const installDir = resolveInstallDir();
     if (path.resolve(installDir) === path.resolve(BASE_DIR)) {
         warn('安装目录就是当前目录——无需复制，直接原地做用户级安装');
         return; // 走常规流程
     }
+    // 防护：安装目录不能在项目文件夹内部（cpSync 会拒绝复制到自身子目录）
+    const rel = path.relative(BASE_DIR, installDir);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+        fail(`安装目录不能在项目文件夹内部，请换一个位置（如 ~/.claude/claude-eyes）: ${installDir}`);
+        process.exit(1);
+    }
     step(`安装到固定目录: ${installDir}`);
     fs.mkdirSync(installDir, { recursive: true });
 
-    // 更新场景：清掉旧内容，但保留"带 key 的 vision-config.json"
+    // 版本跟踪：读取旧的 installed-version
+    let oldVer = '';
+    try { oldVer = fs.readFileSync(path.join(installDir, 'installed-version'), 'utf8').trim(); } catch { /* 无 */ }
+
+    // 更新场景：备份旧配置（密钥兜底，防重装出错丢失）
     const cfgInInstall = path.join(installDir, 'vision-config.json');
+    try {
+        if (fs.existsSync(cfgInInstall)) fs.copyFileSync(cfgInInstall, cfgInInstall + '.bak');
+    } catch { /* ignore */ }
+
+    // 清掉旧内容，但保留"带 key 的 vision-config.json"
     let keepKey = false;
     try {
         const c = JSON.parse(fs.readFileSync(cfgInInstall, 'utf8'));
         keepKey = !!(c.api_key);
     } catch { keepKey = false; }
     for (const entry of fs.readdirSync(installDir)) {
-        if (entry === 'vision-config.json' && keepKey) continue;
+        if ((entry === 'vision-config.json' && keepKey) || entry === 'vision-config.json.bak') continue;
         fs.rmSync(path.join(installDir, entry), { recursive: true, force: true });
     }
 
     // 复制源码（排除依赖/运行垃圾/项目级注册/密钥）
+    // 用 copyTree 而非 fs.cpSync（Windows 上 cpSync 复制含 .git 的目录树会原生崩溃 exit 127）
     const EXCLUDE = new Set(['node_modules', 'shots', 'logs', '.git', '.mcp.json', 'vision-config.json']);
-    fs.cpSync(BASE_DIR, installDir, {
-        recursive: true,
-        filter: (src) => {
-            const rel = path.relative(BASE_DIR, src);
-            if (!rel) return true; // 根目录本身
-            return !rel.split(path.sep).some((p) => EXCLUDE.has(p));
-        }
-    });
+    copyTree(BASE_DIR, installDir, EXCLUDE);
     // 密钥：安装目录没有带 key 的，就从源带过去
     if (!keepKey && fs.existsSync(path.join(BASE_DIR, 'vision-config.json'))) {
         fs.copyFileSync(path.join(BASE_DIR, 'vision-config.json'), cfgInInstall);
@@ -249,7 +280,11 @@ function installToPermanent() {
         process.exit(1);
     }
 
+    // 写版本跟踪
+    fs.writeFileSync(path.join(installDir, 'installed-version'), CURRENT_VERSION);
+
     console.log(`\n${c.green('✅ 安装完成')}`);
+    console.log(`  版本: ${oldVer ? `${c.yellow(`v${oldVer}`)} → ` : ''}${c.cyan(`v${CURRENT_VERSION}`)}`);
     console.log(`  固定安装目录: ${installDir}`);
     console.log(`  用户级 MCP/skill 已指向它。现在可以 ${c.yellow('删除原始解压目录')} 了。`);
     console.log(`  更新方式: 重新下载 zip → 解压 → 再跑 node setup.mjs --update`);
@@ -277,6 +312,37 @@ function uninstallAll() {
     }
     console.log(`\n${c.green('✅ 已卸载')}`);
     console.log('  如需删除当前项目文件夹,请手动删除。');
+    return true;
+}
+
+// ---------- 一键升级（--upgrade）：先卸旧版，再装全新版本 ----------
+function upgradeAll() {
+    step('升级: 先卸载旧版，再安装全新版本');
+    const installDir = resolveInstallDir();
+
+    // 1) 旧版本检测
+    let oldVer = '';
+    try { oldVer = fs.readFileSync(path.join(installDir, 'installed-version'), 'utf8').trim(); } catch { /* 无 */ }
+    if (oldVer) ok(`检测到旧版本: v${oldVer}`);
+    else warn('未检测到版本记录（可能是 v1.00 就地安装，或首次升级）');
+
+    // 2) 卸载旧用户级注册 + skill（清掉老就地安装指向旧文件夹的注册）
+    runClaude(['mcp', 'remove', 'image-analyzer', '-s', 'user']);
+    const skillDir = path.join(os.homedir(), '.claude', 'skills', 'analyze-image');
+    fs.rmSync(skillDir, { recursive: true, force: true });
+    ok('已卸载旧版用户级注册与 skill');
+
+    // 3) 备份旧配置（若固定安装目录存在）
+    const cfgPath = path.join(installDir, 'vision-config.json');
+    try {
+        if (fs.existsSync(cfgPath)) fs.copyFileSync(cfgPath, cfgPath + '.bak');
+    } catch { /* ignore */ }
+
+    // 4) 全新安装到固定目录
+    installToPermanent();
+
+    console.log(`\n${c.green('✅ 升级完成')}: v${oldVer || '?'} → v${CURRENT_VERSION}`);
+    console.log(`  旧解压文件夹现在可以删除（如需保留旧密钥，见 vision-config.json.bak）。`);
     return true;
 }
 
@@ -314,6 +380,10 @@ console.log(c.cyan(`\n图像分析系统 一键安装向导${INSTALL ? '（安�
 ok(`当前目录: ${BASE_DIR}`);
 verifyNodeVersion();
 
+if (UPGRADE) {
+    upgradeAll();
+    process.exit(0);
+}
 if (UNINSTALL) {
     uninstallAll();
     process.exit(0);
