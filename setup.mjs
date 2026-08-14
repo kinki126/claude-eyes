@@ -194,11 +194,21 @@ function installUserLevelMcp() {
         warn('claude mcp add 失败——请确认 claude 命令可用，或手动按 docs/USAGE.md 操作');
         return false;
     }
-    // 设置连接超时：claude-mem 等插件的同步 hook 可能阻塞启动数十秒，默认 30s 会 CONNECT_TIMEOUT
-    const ur = runClaude(['mcp', 'update', 'image-analyzer', '-s', 'user', '--timeout', '120000'], true);
-    const uout = `${ur.stdout || ''} ${ur.stderr || ''}`.trim();
-    if (ur.status === 0) ok('MCP 连接超时已设为 120s（免疫 claude-mem 等启动阻塞）');
-    else warn(`设置 MCP 超时失败（不影响使用，可手动 claude mcp update image-analyzer --timeout 120000）：${uout}`);
+    // 设置连接超时：claude mcp update 命令在新版 Claude Code 不存在，直接写 ~/.claude.json
+    // claude-mem 等插件的同步 hook 可能阻塞启动数十秒，默认 30s 会 CONNECT_TIMEOUT，调到 120s
+    try {
+        const cjPath = path.join(os.homedir(), '.claude.json');
+        const cj = JSON.parse(fs.readFileSync(cjPath, 'utf8'));
+        if (cj.mcpServers && cj.mcpServers['image-analyzer']) {
+            cj.mcpServers['image-analyzer'].timeout = 120000;
+            fs.writeFileSync(cjPath, JSON.stringify(cj, null, 2) + '\n');
+            ok('MCP 连接超时已设为 120s（免疫 claude-mem 等启动阻塞）');
+        } else {
+            warn('未在 ~/.claude.json 找到 image-analyzer，跳过设置超时（可手动加 "timeout": 120000）');
+        }
+    } catch (e) {
+        warn(`设置 MCP 超时失败（不影响使用，可手动在 ~/.claude.json 的 image-analyzer 里加 "timeout": 120000）：${e.message}`);
+    }
     ok('MCP 已注册到用户级（先删后加，确保指向当前目录）');
     return true;
 }
