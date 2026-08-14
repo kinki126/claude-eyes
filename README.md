@@ -43,6 +43,7 @@ Prereqs: Node ≥ 18, Claude Code.
 # 1. Run the wizard (enter your own vision-model API key)
 node setup.mjs   # default = user-level install (works in any project); add --project-level for folder-only
 # recommended: install to a fixed dir so the unzip folder can be deleted -> node setup.mjs --install
+# switch vision provider: node setup.mjs --provider qwen|zhipu|doubao|openai|ollama
 
 # 2. Restart Claude Code in the project root; /mcp should show image-analyzer ✓
 

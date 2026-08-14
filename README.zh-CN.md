@@ -43,6 +43,7 @@ Claude Code ──函数调用──▶ mcp-image-analyzer (MCP) ──HTTP─�
 # 1. 运行一键安装向导(填你自己的视觉模型 API Key)
 node setup.mjs   # 默认用户级安装:任意项目可用;只想本项目用则加 --project-level
 # 推荐:装到固定目录(解压文件夹可删) -> node setup.mjs --install
+# 换视觉模型: node setup.mjs --provider qwen|zhipu|doubao|openai|ollama
 
 # 2. 重启 Claude Code(在项目根),/mcp 确认 image-analyzer ✓
 

@@ -11,6 +11,7 @@
 //   node setup.mjs --update       更新（下载新 zip 解压到当前文件夹后跑本命令，等价重装）
 //   node setup.mjs --upgrade      一键升级（先卸载旧版注册，再安装全新版本；老 v1.00 就地用户用这个）
 //   node setup.mjs --uninstall    卸载（移除用户级 MCP/skill + 删固定安装目录）
+//   node setup.mjs --provider <名>  一键切换视觉提供商（zhipu|qwen|doubao|openai|siliconflow|ollama|custom）
 //   node setup.mjs --yes          非交互（跳过提问，用环境变量）
 //   环境变量：VISION_API_KEY      视觉模型密钥（--yes 或非 TTY 时用）
 //            VISION_BASE_URL/VISION_MODEL/VISION_CHAT_PATH   （可选，覆盖提供商）
@@ -53,6 +54,17 @@ try {
     CURRENT_VERSION = JSON.parse(fs.readFileSync(path.join(BASE_DIR, 'package.json'), 'utf8')).version || '0.0.0';
 } catch { /* 忽略 */ }
 
+// 视觉提供商预设（均为 OpenAI 兼容 chat/completions；模型 ID 可按当前官方文档调整，可用 VISION_* env 覆盖）
+const PROVIDER_PRESETS = {
+    zhipu:       { name: '智谱',                base_url: 'https://open.bigmodel.cn/api/paas/v4',                  model: 'glm-4.6v-flash',      chat_path: '/chat/completions' },
+    qwen:        { name: '通义千问(阿里百炼)',     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',   model: 'qwen-vl-max',         chat_path: '/chat/completions' },
+    doubao:      { name: '豆包(Doubao-Seed)',     base_url: 'https://ark.cn-beijing.volces.com/api/v3',             model: 'doubao-seed-evolving', chat_path: '/chat/completions' },
+    openai:      { name: 'OpenAI',               base_url: 'https://api.openai.com/v1',                            model: 'gpt-4o',              chat_path: '/chat/completions' },
+    siliconflow: { name: '硅基流动',              base_url: 'https://api.siliconflow.cn/v1',                       model: 'Qwen/Qwen2.5-VL-72B-Instruct', chat_path: '/chat/completions' },
+    ollama:      { name: 'Ollama(本地)',          base_url: 'http://127.0.0.1:11434/v1',                           model: 'llama3.2-vision',     chat_path: '/chat/completions' },
+    custom:      { name: '自定义',                base_url: '', model: '', chat_path: '/chat/completions' }
+};
+
 const c = {
     green: (s) => `\x1b[32m${s}\x1b[0m`,
     yellow: (s) => `\x1b[33m${s}\x1b[0m`,
@@ -90,13 +102,22 @@ async function ensureVisionConfig() {
     }
     if (RESET_KEY) warn('--reset-key：将重新生成 vision-config.json（覆盖原密钥）');
 
-    const base_url = process.env.VISION_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4';
-    const model = process.env.VISION_MODEL || 'glm-4.6v';
-    const chat_path = process.env.VISION_CHAT_PATH || '/chat/completions';
+    // 提供商选择：--provider 参数 > VISION_PROVIDER 环境变量 > 交互式提问（默认 zhipu）
+    let providerKey = argValue('--provider') || process.env.VISION_PROVIDER || '';
+    if (!providerKey && !NON_INTERACTIVE) {
+        const list = Object.entries(PROVIDER_PRESETS).map(([k, p]) => `${k}=${p.name}`).join(' | ');
+        const ans = (await ask(`选择视觉提供商（${list}，默认 zhipu）: `) || 'zhipu').trim().toLowerCase();
+        providerKey = ans;
+    }
+    const preset = PROVIDER_PRESETS[providerKey] || PROVIDER_PRESETS.zhipu;
+
+    const base_url = process.env.VISION_BASE_URL || preset.base_url;
+    const model = process.env.VISION_MODEL || preset.model;
+    const chat_path = process.env.VISION_CHAT_PATH || preset.chat_path;
 
     let api_key = process.env.VISION_API_KEY || '';
     if (!api_key && !NON_INTERACTIVE) {
-        api_key = await ask(`请输入视觉模型 API Key（智谱，留空跳过）: `) || '';
+        api_key = await ask(`请输入视觉模型 API Key（${preset.name}，留空跳过）: `) || '';
     }
 
     const cfg = { base_url, api_key, model, chat_path, providers: [] };
@@ -346,6 +367,41 @@ function upgradeAll() {
     return true;
 }
 
+// ---------- --provider 一键切换视觉提供商 ----------
+function switchProvider() {
+    const key = argValue('--provider');
+    const preset = PROVIDER_PRESETS[key];
+    if (!preset) {
+        fail(`未知提供商: ${key}（可用: ${Object.keys(PROVIDER_PRESETS).join(' | ')}）`);
+        return false;
+    }
+    const cfgPath = path.join(BASE_DIR, 'vision-config.json');
+    if (!fs.existsSync(cfgPath)) {
+        warn('还没有 vision-config.json——将按所选提供商生成新配置');
+        return false; // 交给 ensureVisionConfig 处理
+    }
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch { /* 重建 */ }
+    try { fs.copyFileSync(cfgPath, cfgPath + '.bak'); } catch { /* ignore */ }
+    // 顶层 + providers[0] 都设成新提供商（vision-client 以 providers[0] 为主，只改顶层不生效）
+    const apiKey = cfg.api_key || process.env.VISION_API_KEY || '';
+    cfg.base_url = process.env.VISION_BASE_URL || preset.base_url;
+    cfg.model = process.env.VISION_MODEL || preset.model;
+    cfg.chat_path = preset.chat_path;
+    if (!Array.isArray(cfg.providers)) cfg.providers = [];
+    cfg.providers[0] = {
+        name: preset.name || 'primary',
+        base_url: cfg.base_url,
+        api_key: apiKey,
+        model: cfg.model,
+        chat_path: cfg.chat_path
+    };
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+    ok(`已切换视觉提供商 → ${preset.name}（${cfg.model}）`);
+    ok(`  api_key ${apiKey ? '已保留' : '为空——请用 --reset-key 或 VISION_API_KEY 填写'}`);
+    return true;
+}
+
 function healthCheck() {
     return new Promise((resolve) => {
         const req = http.get('http://127.0.0.1:8765/health', { timeout: 1500 }, (res) => {
@@ -380,6 +436,10 @@ console.log(c.cyan(`\n图像分析系统 一键安装向导${INSTALL ? '（安�
 ok(`当前目录: ${BASE_DIR}`);
 verifyNodeVersion();
 
+if (argValue('--provider')) {
+    if (switchProvider()) process.exit(0);
+    // 无现有配置：继续走正常流程，由 ensureVisionConfig 按所选提供商建配置
+}
 if (UPGRADE) {
     upgradeAll();
     process.exit(0);

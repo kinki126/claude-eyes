@@ -77,16 +77,43 @@
 > ```
 > 免费被限流时会自动回退到付费版；`meta.provider` 会标明实际用的是哪个。
 
-## 换提供商（零代码）
+## 切换视觉提供商
 
-本系统只依赖 **OpenAI 兼容的 chat/completions + vision（image_url base64）** 接口。切换提供商只需改配置：
+本系统只依赖 **OpenAI 兼容的 chat/completions + vision（image_url base64）** 接口，主流视觉模型都能用。
+
+### 一键切换（推荐）
 
 ```bash
-# 例：切到本地 Ollama（llama3.2-vision 等视觉模型）
+node setup.mjs --provider zhipu       # 智谱（GLM，免费 flash 或付费 4.6V）
+node setup.mjs --provider qwen        # 通义千问（Qwen-VL）
+node setup.mjs --provider doubao      # 豆包（Doubao-Seed-Evolving）
+node setup.mjs --provider openai      # OpenAI（GPT-4o）
+node setup.mjs --provider siliconflow # 硅基流动（Qwen2.5-VL-72B）
+node setup.mjs --provider ollama      # 本地 Ollama（llama3.2-vision 等）
+```
+
+切换会**保留 api_key**、备份旧配置（`vision-config.json.bak`）。换提供商后要它的 API Key：`node setup.mjs --reset-key`（或设 `VISION_API_KEY`）。
+
+### 提供方预设对比
+
+| 预设 | 模型 | 适合场景 | 备注 |
+|---|---|---|---|
+| `zhipu` | `glm-4.6v-flash`(免费) / `glm-4.6v`(付费) | 中文 UI/报错 OCR | 中文识别最强；免费版高峰有限流 |
+| `qwen` | `qwen-vl-max` | 截图转代码、GUI 理解 | 性价比优，截图→代码准确率高 |
+| `doubao` | `doubao-seed-evolving` | 推理 + 多模态、工具调用 | 固定模型 ID 持续进化；key 在火山方舟创建 |
+| `openai` | `gpt-4o` | 通用强视觉 | 需海外账号/网络 |
+| `siliconflow` | `Qwen/Qwen2.5-VL-72B-Instruct` | 开源模型托管 | 国内可访问 |
+| `ollama` | `llama3.2-vision` | 本地/隐私 | 免费但精度一般 |
+
+> 价格请以各平台当前定价为准；免费模型（如 GLM-4.6V-Flash）平时省钱但高峰可能限流（429）。
+
+### 手动改配置（等价）
+
+```bash
+# 例：切到本地 Ollama（临时，用环境变量）
 VISION_BASE_URL=http://127.0.0.1:11434/v1 VISION_MODEL=llama3.2-vision node zhipu-bridge-api.js
 
-# 例：切到 OpenAI
-VISION_BASE_URL=https://api.openai.com/v1 VISION_MODEL=gpt-4o VISION_API_KEY=sk-xxx node zhipu-bridge-api.js
+# 或直接改 vision-config.json 的 base_url / model / api_key（改完重启桥接）
 ```
 
 ## 调试端点
