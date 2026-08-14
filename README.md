@@ -22,6 +22,8 @@ When your Claude Code runs on a non-vision backend (e.g. DeepSeek), it can't see
 - 🔌 **Provider-agnostic** — depends only on OpenAI-compatible `chat/completions` + vision (`image_url` base64); switch providers via config (Zhipu / OpenAI / Qwen-VL / DeepSeek-VL / Ollama / vLLM)
 - ⚙️ **Ops-ready** — dedup cache, per-user rate limiting, usage logs, health check, multi-provider failover, auto-spawned bridge
 - 🧩 **Portable** — all paths derived from the current directory + home directory; one-command `setup.mjs`; move the whole folder anywhere
+- 🔍 **Multi-turn focus + coordinate localization** — `focus` zooms the vision model into a specific region; `regions` returns normalized bboxes that map visual positions to code coordinates
+- 🧾 **Verbatim + verification** — `verbatim` transcribes error stacks/codes verbatim (no lossy summarization); `task=verify` sends a conclusion back to the vision model for confirmation (`verdict: true/false/uncertain`)
 
 ## Architecture
 

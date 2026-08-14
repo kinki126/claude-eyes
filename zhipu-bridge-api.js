@@ -40,6 +40,8 @@ const PROMPT_TAIL = `
 - 把标注区域内的文字（含用户手写或批注的文字、被框住的原图文字）一字不差地完整转录到 "annotated_text" 字段。
 - 用一句话在 analysis 里说明标注所在的大致位置。
 - 分析标注指向的是什么错误/状态/问题。
+- 把截图里的报错堆栈、报错消息、错误码、关键日志等【原文】一字不差、完整转录到 "verbatim" 字段——不要概括、不要省略、不要改写（analysis 可以概括，verbatim 必须是原文）。
+- 为每个用户附加标注区域、以及每个关键报错/关键界面元素，输出其在截图中的归一化位置到 "regions" 字段。
 
 根据分析结果，自主决定本次分析流程是否应该结束：
 - 若截图明确显示任务成功、流程已完成、内容已分析完毕、或用户明确表示结束 → next_action 输出 "stop"。
@@ -48,32 +50,79 @@ const PROMPT_TAIL = `
 请严格只输出一个 JSON 对象，不要输出任何多余文字、解释、Markdown 代码块标记。格式：
 {
   "analysis": "完整详细的截图内容分析（全部文字、报错、界面）",
+  "verbatim": "截图里关键原文的完整逐字转录（报错堆栈/报错消息/错误码/日志等，一字不差、不概括；无则空字符串）",
   "annotated_text": "用户附加标注区域内文字的逐字转录（截图无任何用户标注则为空字符串）",
   "keywords": ["从截图提取的、可用于代码检索的关键词，如报错函数名/错误码/文件名/接口路径等，最多 10 个"],
+  "regions": [{"label":"框选|高亮|箭头|报错|按钮|文本|其他","bbox":{"x":0.1,"y":0.2,"w":0.3,"h":0.1},"text":"该区域内文字","note":"一句话说明"}],
   "next_action": "continue 或 stop",
   "reason": "一句话说明继续或停止的原因"
-}`;
+}
+
+regions 说明：bbox 使用归一化坐标——x/y 为区域左上角、w/h 为宽高，范围均为 0.0~1.0（相对整张图，与图片实际像素尺寸无关）。每个标注区域和每个关键界面元素各一条；没有明确区域时 "regions" 输出空数组 []。`;
 
 const PROMPT_TEMPLATES = {
     general: (lang) => `你是一个专业的截图分析助手。请仔细分析用户提供的截图，提取全部文字、报错信息、按钮与界面元素、操作状态等，力求完整准确。${langPrompt(lang)}`,
     error: (lang) => `你是一个专业的报错定位助手。请仔细分析用户提供的截图，重点提取：错误类型、报错文字/堆栈、错误码、错误触发条件、涉及的文件或接口、以及修复思路。${langPrompt(lang)}`,
     ui: (lang) => `你是一个专业的界面走查助手。请仔细分析用户提供的截图，提取：界面元素、布局结构、文案内容、操作状态（加载/成功/失败/禁用）、可点击区域与交互提示。${langPrompt(lang)}`,
     ocr: (lang) => `你是一个专业的 OCR 助手。请完整提取截图中的所有文字内容，按视觉顺序排列，尽量保留原始排版。${langPrompt(lang)}`,
-    diff: (lang) => `你是一个专业的界面/截图对比助手。请先分别描述用户提供的每一张截图的内容，再重点对比各截图之间的差异（新增、删除、变化的部分），从界面元素、文案、状态等角度列出。${langPrompt(lang)}`
+    diff: (lang) => `你是一个专业的界面/截图对比助手。请先分别描述用户提供的每一张截图的内容，再重点对比各截图之间的差异（新增、删除、变化的部分），从界面元素、文案、状态等角度列出。${langPrompt(lang)}`,
+    verify: (lang) => `你是一个截图内容真伪核验助手。用户会给出一个关于截图的断言（claim），请仔细核对截图，判断该断言是否成立，并给出图中证据。${langPrompt(lang)}`
 };
 
 function langPrompt(lang) {
     return lang === 'en' ? '\n请使用 English 输出 analysis。' : '\n请使用中文输出 analysis。';
 }
 
-function buildPrompt(task, lang, desc) {
+function buildPrompt(task, lang, desc, focus) {
     const tpl = PROMPT_TEMPLATES[task] || PROMPT_TEMPLATES.general;
-    let p = tpl(lang) + PROMPT_TAIL;
+    let p = tpl(lang);
+    if (task === 'verify') {
+        p += `\n待核验的断言：${desc || '（未提供断言）'}`;
+        p += `\n\n请严格只输出一个 JSON 对象，不要输出任何多余文字、解释、Markdown 代码块标记。格式：
+{
+  "verdict": "true 或 false 或 uncertain",
+  "evidence": "图中支持或反驳该断言的具体证据（引用原文 / 描述位置）",
+  "analysis": "一句话总结核验结论"
+}
+
+verdict 判定规则：true = 截图内容支持该断言成立；false = 截图内容明确反驳该断言；uncertain = 无法从截图确定（信息不足或图中没有相关内容）。`;
+        return p;
+    }
+    p += PROMPT_TAIL;
     if (desc) p += `\n用户附加说明：${desc}`;
+    if (focus) p += `\n${focusPrompt(focus)}`;
     return p;
 }
 
+function focusPrompt(focus) {
+    return `重点关注区域/问题（最高优先级，覆盖默认全面分析）：${focus}。请：
+- 把该区域/问题作为本次分析的核心，优先、仔细分析，analysis 围绕它展开。
+- annotated_text 优先转录该区域内的文字。
+- keywords 优先提取与该区域相关的可检索关键词。
+- regions 优先输出该区域的归一化 bbox 定位。`;
+}
+
 // ---------- 健壮 JSON 解析（导出便于单测） ----------
+/** 解析 regions：bbox 归一化到 [0,1]，尺度自适应（[0,1] / 0~100 / 0~1000），坏值过滤 */
+function parseRegions(raw) {
+    if (!Array.isArray(raw)) return [];
+    return raw.slice(0, 20).map((r) => {
+        if (typeof r !== 'object' || r === null) return null;
+        const b = r.bbox && typeof r.bbox === 'object' ? r.bbox : null;
+        const vals = b ? [b.x, b.y, b.w, b.h].map(Number) : [];
+        const valid = vals.length === 4 && vals.every((v) => Number.isFinite(v));
+        if (!valid) {
+            return { label: String(r.label ?? '').trim(), bbox: null, text: String(r.text ?? '').trim(), note: String(r.note ?? '').trim() };
+        }
+        // 尺度判断（整体一致）：任一值 >100 → 0~1000；否则任一值 >1 → 0~100；否则 [0,1]
+        let scale = 1;
+        if (vals.some((v) => v > 100)) scale = 1000;
+        else if (vals.some((v) => v > 1)) scale = 100;
+        const [x, y, w, h] = vals.map((v) => Math.max(0, Math.min(1, v / scale)));
+        return { label: String(r.label ?? '').trim(), bbox: { x, y, w, h }, text: String(r.text ?? '').trim(), note: String(r.note ?? '').trim() };
+    }).filter((r) => r && (r.label || r.text || r.bbox));
+}
+
 function extractAnalysis(content) {
     let raw = Array.isArray(content)
         ? content.filter(c => c && c.type === 'text').map(c => c.text).join('\n')
@@ -116,17 +165,22 @@ function extractAnalysis(content) {
             ? parsed.keywords.map(String).slice(0, 10)
             : [];
         const annotatedText = String(parsed.annotated_text ?? '').trim();
-        return { raw, analysis: String(parsed.analysis ?? '').trim(), action, reason, keywords, annotatedText, status };
+        const verbatim = String(parsed.verbatim ?? '').trim();
+        const regions = parseRegions(parsed.regions);
+        const verdictRaw = String(parsed.verdict ?? '').trim().toLowerCase();
+        const verdict = ['true', 'false', 'uncertain'].includes(verdictRaw) ? verdictRaw : null;
+        const evidence = String(parsed.evidence ?? '').trim();
+        return { raw, analysis: String(parsed.analysis ?? '').trim(), action, reason, keywords, annotatedText, verbatim, regions, verdict, evidence, status };
     }
 
     // 5. 正则回退：从散文里抠 next_action
     const m = raw.match(/["']?next_action["']?\s*[:：]\s*["']?(continue|stop)["']?/i);
     if (m) {
-        return { raw, analysis: raw.trim(), action: m[1].toLowerCase(), reason: '（通过正则回退提取）', keywords: [], annotatedText: '', status: 'fallback' };
+        return { raw, analysis: raw.trim(), action: m[1].toLowerCase(), reason: '（通过正则回退提取）', keywords: [], annotatedText: '', verbatim: '', regions: [], verdict: null, evidence: '', status: 'fallback' };
     }
 
     // 6. 兜底：默认 continue（误判 stop 会错误终止流程，更糟）
-    return { raw, analysis: raw.trim(), action: 'continue', reason: '模型输出无法解析，默认继续', keywords: [], annotatedText: '', status: 'failed' };
+    return { raw, analysis: raw.trim(), action: 'continue', reason: '模型输出无法解析，默认继续', keywords: [], annotatedText: '', verbatim: '', regions: [], verdict: null, evidence: '', status: 'failed' };
 }
 
 // ---------- 去重缓存（扩展点 E） ----------
@@ -214,6 +268,7 @@ const server = http.createServer(async (req, res) => {
         const task = urlObj.searchParams.get('task') || 'general';
         const lang = urlObj.searchParams.get('lang') || 'zh';
         const desc = urlObj.searchParams.get('desc') || '';
+        const focus = urlObj.searchParams.get('focus') || '';
         const user = urlObj.searchParams.get('user') || 'local';
         const forceAction = urlObj.searchParams.get('force_action');
         const raw = urlObj.searchParams.get('raw') === '1';
@@ -252,7 +307,7 @@ const server = http.createServer(async (req, res) => {
         const mergedMd5 = crypto.createHash('md5').update(Buffer.concat(rawBufs)).digest('hex');
 
         let analysisRes, provider = null, modelUsed = null, usage = null, cacheHit = 'miss', upstreamRaw = null;
-        const cacheKey = `${mergedMd5}|${task}|${lang}|${PRIMARY_CFG.model}`;
+        const cacheKey = `${mergedMd5}|${task}|${lang}|${desc}|${focus}|${PRIMARY_CFG.model}`;
 
         const cached = !forceAction && !raw ? cacheGet(cacheKey) : null;
         if (cached) {
@@ -275,7 +330,7 @@ const server = http.createServer(async (req, res) => {
                     .toBuffer();
                 base64Images.push(compressedBuf.toString('base64'));
             }
-            const prompt = buildPrompt(task, lang, desc);
+            const prompt = buildPrompt(task, lang, desc, focus);
             const up = await analyzeImage({ base64Images, prompt });
             provider = up.provider; modelUsed = up.model; usage = up.usage;
             upstreamRaw = up.content;
@@ -299,7 +354,7 @@ const server = http.createServer(async (req, res) => {
             ok: true,
             images: imagesField,
             image: imgPaths.length === 1 ? imagesField[0] : undefined, // 单图兼容旧字段
-            analysis: { text: analysisRes.analysis, raw: analysisRes.raw, keywords: analysisRes.keywords || [], annotated_text: analysisRes.annotatedText || '' },
+            analysis: { text: analysisRes.analysis, raw: analysisRes.raw, keywords: analysisRes.keywords || [], annotated_text: analysisRes.annotatedText || '', verbatim: analysisRes.verbatim || '', regions: analysisRes.regions || [], verdict: analysisRes.verdict ?? null, evidence: analysisRes.evidence || '' },
             control: {
                 action: analysisRes.action,
                 reason: analysisRes.reason,
@@ -310,6 +365,7 @@ const server = http.createServer(async (req, res) => {
                 model: modelUsed || PRIMARY_CFG.model,
                 provider: provider || (forceAction ? 'forced' : cacheHit === 'hit' ? 'cache' : 'unknown'),
                 task, lang,
+                focus: focus || undefined,
                 parse: analysisRes.status,
                 cache: cacheHit,
                 image_count: imgPaths.length,
@@ -343,4 +399,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { extractAnalysis, buildPrompt, rateLimit, cacheGet, cacheSet };
+module.exports = { extractAnalysis, buildPrompt, parseRegions, rateLimit, cacheGet, cacheSet };

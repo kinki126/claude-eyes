@@ -22,6 +22,8 @@
 - 🔌 **可换提供商**:只依赖 OpenAI 兼容的 chat/completions + vision(image_url base64),改配置即可切换智谱/OpenAI/通义千问-VL/DeepSeek-VL/Ollama/vLLM
 - ⚙️ **运维就绪**:图片去重缓存、按用户限流、用量日志、健康检查、多模型自动回退、桥接进程自动拉起
 - 🧩 **可迁移**:全部路径由当前目录 + 用户主目录自动推导,一键 `setup.mjs` 配置,整体搬迁即用
+- 🔍 **多轮追问 + 坐标定位**:`focus` 让视觉模型定向细看指定区域;`regions` 输出标注区域归一化 bbox,把"图里位置"对齐到"代码坐标"
+- 🧾 **原文兜底 + 反向验证**:`verbatim` 逐字转录报错堆栈/错误码,不被概括吞掉;`task=verify` 把推理结论发回视觉模型核验(verdict: true/false/uncertain)
 
 ## 架构
 

@@ -66,7 +66,7 @@ export async function ensureBridge() {
  * @param {string} [opts.user]          兜底用户标识（远程由 userContext 覆盖）
  */
 export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, user = MCP_USER } = {}) {
-    return async ({ path, paths, description, task, lang }) => {
+    return async ({ path, paths, description, task, lang, focus }) => {
         const imgList = (Array.isArray(paths) && paths.length) ? paths.slice(0, 6) : (path ? [path] : []);
         if (imgList.length === 0) {
             return { isError: true, content: [{ type: 'text', text: '缺少参数：请传 path（单张）或 paths（多张，最多 6 张，均为本地图片绝对路径）。' }] };
@@ -88,6 +88,7 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
                 for (const p of imgList) qs.append('paths', p);
             }
             if (description) qs.set('desc', description);
+            if (focus) qs.set('focus', focus);
             qs.set('task', task || 'general');
             qs.set('lang', lang || 'zh');
             const activeUser = userContext.getStore()?.user || user;
@@ -105,6 +106,10 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
                 analysis: body.analysis.text || body.analysis.raw || '(模型未返回分析内容)',
                 keywords: body.analysis.keywords || [],
                 annotated_text: body.analysis.annotated_text || '',
+                verbatim: body.analysis.verbatim || '',
+                regions: body.analysis.regions || [],
+                verdict: body.analysis.verdict ?? null,
+                evidence: body.analysis.evidence || '',
                 control: body.control,
                 meta: {
                     model: body.meta.model,

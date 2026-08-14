@@ -2,6 +2,20 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 新增
+
+- **focus 多轮追问**:`analyze_image` 新增 `focus` 参数,让视觉模型定向细看指定区域,实现"粗看 → 追问细节"的多轮视觉问答
+- **regions 归一化坐标**:视觉模型输出标注区域/关键元素的 bbox(归一化 [0,1],尺度自适应),把视觉位置对齐到代码坐标/布局
+- **verbatim 原文兜底**:报错堆栈/报错消息/错误码/日志的逐字原文独立字段,不再被 analysis 概括吞掉
+- **task=verify 反向验证**:把推理结论作为断言发回视觉模型核验,返回结构化 verdict(true/false/uncertain)+ evidence
+- **修复**:缓存 key 纳入 desc/focus(原缓存 key 未含 desc,不同描述会命中同一条缓存)
+
+### 文档
+
+- SKILL.md 新增「多轮追问」「反向验证」引导;README 补充新能力说明
+
 ## [1.1.0] - 2026-08-14
 
 ### 新增
