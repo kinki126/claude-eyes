@@ -9,7 +9,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { createAnalyzeImageHandler } from './analyze-tool.js';
 
-const server = new McpServer({ name: 'mcp-image-analyzer', version: '1.0.0' });
+const server = new McpServer({ name: 'mcp-image-analyzer', version: '1.2.0' });
 
 server.tool(
     'analyze_image',
