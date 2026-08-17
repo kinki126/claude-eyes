@@ -5,6 +5,7 @@
 // ============================================================
 
 import { spawn, execSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -222,9 +223,41 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
     };
 }
 
-// P1-1: locate_code 工具 —— 用 ripgrep/findstr/grep 搜索 keywords，返回结构化候选
+// P1-1: locate_code 工具 —— 用 Node 原生遍历搜索 keywords，返回结构化候选
 // 在 MCP 工具层实现（而非 bridge 端），因为它需要访问客户端本地项目代码
 // 只返回 { file, line, match } 三元组；上下文行交给 Claude 用 Read 工具读，保持工具单一职责
+
+// Node 原生搜索要跳过的目录（依赖/构建/产物，避免扫到 node_modules 拖慢）
+const EXCLUDE_DIRS = new Set(['node_modules', '.git', '.claude-eyes', 'logs', 'shots', 'dist', 'build', '.next', 'coverage', '__pycache__', '.venv', 'venv', '.idea']);
+const MAX_FILES_SCAN = 3000; // 单次扫描最多处理的文件数（防大项目拖慢）
+
+/** 递归收集 root 下匹配扩展名的文件（排除依赖/构建目录） */
+function collectFiles(root, exts, limit) {
+    const files = [];
+    const walk = (dir) => {
+        if (files.length >= limit) return;
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+            if (files.length >= limit) return;
+            if (e.isDirectory()) {
+                if (EXCLUDE_DIRS.has(e.name)) continue;
+                walk(path.join(dir, e.name));
+            } else if (e.isFile()) {
+                const ext = path.extname(e.name).toLowerCase();
+                if (exts.includes(ext)) files.push(path.join(dir, e.name));
+            }
+        }
+    };
+    walk(root);
+    return files;
+}
+
+/** 判断一行匹配是否是"定义处"（声明关键词，而非注释/import 里的字符串引用） */
+function isDefinition(match, kwLower) {
+    const safeKw = kwLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b(function|const|let|var|class|async|export)\\s+${safeKw}\\b`, 'i').test(match);
+}
 
 /**
  * 创建 locate_code 处理函数。
@@ -251,43 +284,30 @@ export function createLocateCodeHandler({ defaultProjectRoot = PROJECT_ROOT } = 
 
         sendProgress(`正在搜索 ${keywords.length} 个关键词（项目根：${root}）...`);
 
-        // 选择搜索后端：ripgrep（rg）优先，没有则 Windows 用 findstr，其他用 grep -r
-        const hasRg = (() => {
-            try { execSync('rg --version', { stdio: 'ignore', shell: true }); return true; } catch { return false; }
-        })();
-        const isWin = os.platform() === 'win32';
-        const searchEngine = hasRg ? 'ripgrep' : (isWin ? 'findstr' : 'grep');
-
+        // 搜索后端：Node 原生遍历 + 字符串匹配（不依赖 rg/findstr/grep 外部工具，跨平台稳定；
+        // rg 在 Git Bash 里是 function/alias，在 cmd.exe 的 execSync 下不可用，findstr 多扩展名写法也有坑）
+        const searchEngine = 'node-native';
+        const files = collectFiles(root, exts, MAX_FILES_SCAN);
         const results = [];
         for (const kw of keywords) {
-            const safeKw = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            let hits = [];
-            try {
-                let out;
-                if (hasRg) {
-                    const extGlob = exts.map(e => `-g "*${e}"`).join(' ');
-                    const cmd = `rg -n --no-heading --max-count ${maxHits} ${extGlob} "${safeKw}" "${root}"`;
-                    out = execSync(cmd, { encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024 * 4, shell: true });
-                } else if (isWin) {
-                    const extPatterns = exts.map(e => `*${e}`).join(' ');
-                    const cmd = `findstr /n /s /i "${kw}" "${root}\\${extPatterns}"`;
-                    out = execSync(cmd, { encoding: 'utf8', timeout: 20000, maxBuffer: 1024 * 1024 * 4, shell: true });
-                } else {
-                    const extFind = exts.map(e => `-name "*${e}"`).join(' -o ');
-                    const cmd = `find "${root}" -type f \\( ${extFind} \\) -exec grep -n -m ${maxHits} "${safeKw}" {} +`;
-                    out = execSync(cmd, { encoding: 'utf8', timeout: 20000, maxBuffer: 1024 * 1024 * 4, shell: true });
+            const kwLower = kw.toLowerCase();
+            const hits = [];
+            for (const file of files) {
+                if (hits.length >= 500) break; // 宽松上限，防极端项目内存爆炸
+                let content;
+                try { content = fs.readFileSync(file, 'utf8'); } catch { continue; }
+                const lines = content.split(/\r?\n/);
+                for (let i = 0; i < lines.length; i++) {
+                    if (hits.length >= 500) break;
+                    if (lines[i].toLowerCase().includes(kwLower)) {
+                        hits.push({ file, line: i + 1, match: lines[i].trim().slice(0, 200) });
+                    }
                 }
-                // 统一解析输出：文件:行号:匹配内容
-                const lines = out.split(/\r?\n/).filter(Boolean).slice(0, maxHits);
-                hits = lines.map(line => {
-                    const m = line.match(/^(.+?):(\d+):(.*)$/);
-                    return m ? { file: m[1], line: parseInt(m[2], 10), match: m[3] } : null;
-                }).filter(Boolean);
-            } catch (err) {
-                // 搜索失败（如没命中 exit code 非 0）→ 空数组
-                hits = [];
             }
-            results.push({ keyword: kw, hits_count: hits.length, hits });
+            // 定义处优先：声明（function/const/...）排前面，用户找的是定义而非注释/import 里的引用；
+            // 排序后再截断 maxHits，避免定义处被前面的字符串引用挤掉
+            hits.sort((a, b) => (isDefinition(b.match, kwLower) ? 1 : 0) - (isDefinition(a.match, kwLower) ? 1 : 0));
+            results.push({ keyword: kw, hits_count: hits.length, hits: hits.slice(0, maxHits) });
         }
 
         const totalHits = results.reduce((s, r) => s + r.hits_count, 0);
