@@ -16,14 +16,20 @@
 
 ## 特性
 
-- 🖼️ **函数调用分析图片**:Claude 原生调用 `analyze_image` 工具,无需换模型
-- 🔁 **自动停/续控制**:视觉模型根据图片内容自主决定 `continue`(继续等下一张)或 `stop`(流程结束)
-- 📋 **三种喂图方式**:VS Code 面板粘贴(Trae 式)/ 截图自动保存 / 直接给路径
-- 🔌 **可换提供商**:只依赖 OpenAI 兼容的 chat/completions + vision(image_url base64),改配置即可切换智谱/OpenAI/通义千问-VL/DeepSeek-VL/Ollama/vLLM
-- ⚙️ **运维就绪**:图片去重缓存、按用户限流、用量日志、健康检查、多模型自动回退、桥接进程自动拉起
-- 🧩 **可迁移**:全部路径由当前目录 + 用户主目录自动推导,一键 `setup.mjs` 配置,整体搬迁即用
-- 🔍 **多轮追问 + 坐标定位**:`focus` 让视觉模型定向细看指定区域;`regions` 输出标注区域归一化 bbox,把"图里位置"对齐到"代码坐标"
-- 🧾 **原文兜底 + 反向验证**:`verbatim` 逐字转录报错堆栈/错误码,不被概括吞掉;`task=verify` 把推理结论发回视觉模型核验(verdict: true/false/uncertain)
+- 🖼️ **函数调用分析图片**：Claude 原生调用 `analyze_image` 工具，无需换模型
+- 🔁 **自动停/续控制**：视觉模型根据图片内容自主决定 `continue`（继续等下一张）或 `stop`（流程结束）
+- 📋 **四种喂图方式**：VS Code 面板粘贴（Trae 式）/ 截图自动保存 / 直接给路径 / **base64 上传（远程 MCP）**
+- 🔌 **可换提供商**：只依赖 OpenAI 兼容的 chat/completions + vision（image_url base64），改配置即可切换智谱/OpenAI/通义千问-VL/DeepSeek-VL/Ollama/vLLM
+- ⚙️ **运维就绪**：图片去重缓存 + 字节缓存、按用户限流、用量日志、健康检查、多提供商回退 + **重试与熔断**、桥接进程自动拉起
+- 📊 **可观测性**（v1.4.0）：`/metrics` 端点导出 QPS / 延迟 p50/p95/p99 / 错误率 / 按 task/provider/user 聚合（10 分钟滚动窗口）；`X-Request-Id` 贯穿 MCP → bridge → LLM 日志
+- 🧠 **task 自动路由**（v1.4.0）：bridge 扫描 `desc`/`focus` 关键词自动把 `general` 切到 `error`/`diff`/`ocr`/`ui`（用户显式传 task 时永远优先）
+- 🗂️ **分析历史**（v1.4.0）：每次成功分析自动追加到 `.claude-eyes/history.jsonl`，grep 即可回看"昨天那张 TypeError 的图"
+- 🧩 **可迁移**：全部路径由当前目录 + 用户主目录自动推导，一键 `setup.mjs` 配置，整体搬迁即用
+- 🔍 **多轮追问 + 坐标定位 + 精准放大**：`focus` 让视觉模型定向细看；`regions` 输出归一化 bbox；**`crop_bbox` 按上一轮 bbox 裁剪原图并放大到最小边 800px**（v1.3.0+），多轮追问精度大增
+- 🖼️ **图像处理自适应**（v1.4.0）：照片 → WebP q=80（体积降 80%+）；UI/文字 → PNG 无损；长截图（长宽比 > 3）自动切片 2-5 段；`task=ocr` 自动二值化预处理，文字识别更准
+- 🧾 **原文兜底 + 反向验证**：`verbatim` 逐字转录报错堆栈/错误码，不被概括吞掉；`task=verify` 把推理结论发回视觉模型核验（verdict: true/false/uncertain）
+- 📦 **默认 JSON 模式**（v1.3.0+）：默认启用 `response_format: json_object`，模型直接吐合法 JSON；Ollama 等不支持的 provider 自动关闭，bridge 仍靠 5 层 fallback 兜底
+- 🔐 **远程就绪**：`POST /analyze` 收 base64 图片（body 上限 64MB）；`server-http.js` 鉴权用 `crypto.timingSafeEqual` 防时序攻击
 
 ## 架构
 

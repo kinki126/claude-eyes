@@ -11,6 +11,7 @@
 // 因此每个会话(employee)使用独立的 McpServer 实例。
 // ============================================================
 
+import crypto from 'node:crypto';
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -25,10 +26,15 @@ const TOOL_DESCRIPTION =
     '分析图片/截图（报错、界面、文字）。传入绝对路径。必须读取返回中的 control.action：' +
     'continue=继续等待下一张图片；stop=总结并结束本次分析流程，不得再请求更多图片。';
 const TOOL_SCHEMA = {
-    path: z.string().optional().describe('图片绝对路径（单张），Windows 格式，如 E:\\temp\\shot.png；与 paths 二选一'),
-    paths: z.array(z.string()).max(6).optional().describe('多张图片绝对路径（最多 6 张，模型会一起分析；与 path 二选一）'),
+    path: z.string().optional().describe('图片绝对路径（单张），Windows 格式，如 E:\\temp\\shot.png；与 paths 或 image_base64 三选一'),
+    paths: z.array(z.string()).max(6).optional().describe('多张图片绝对路径（最多 6 张，模型会一起分析；与 path 或 images_base64 三选一）'),
+    image_base64: z.string().optional().describe('单张图片的 base64 内容（不带 data:image/png;base64, 前缀）。远程模式/无本地路径时用；与 images_base64 二选一'),
+    images_base64: z.array(z.string()).max(6).optional().describe('多张图片的 base64 内容（最多 6 张）。远程模式下批量上传；与 image_base64 二选一'),
     description: z.string().optional().describe('用户的文字描述，透传给视觉模型，可省略'),
     focus: z.string().optional().describe('重点关注区域/问题（自然语言，如"左上角红框里的报错文字""第3个按钮的文案"）。多轮追问时让视觉模型定向细看该区域，可省略'),
+    crop_bbox: z.object({
+        x: z.number(), y: z.number(), w: z.number(), h: z.number()
+    }).optional().describe('按归一化 bbox 裁剪第 0 张图并放大后再分析，用于多轮追问细看某区域。取值来自上一轮返回的 regions[].bbox（x/y/w/h 均为 0.0~1.0）'),
     task: z.enum(['error', 'ui', 'ocr', 'general', 'diff', 'verify']).optional().default('general')
         .describe('分析任务类型：error=报错定位 ui=界面走查 ocr=纯文字提取 diff=多图差异对比 verify=核验断言 general=全面分析'),
     lang: z.enum(['zh', 'en']).optional().default('zh').describe('analysis 输出语言：zh=中文 en=English'),
@@ -48,7 +54,10 @@ function randomId() {
 
 function authorized(req) {
     if (!AUTH_TOKEN) return true;
-    return (req.headers['authorization'] || '') === `Bearer ${AUTH_TOKEN}`;
+    const got = String(req.headers['authorization'] || '');
+    const want = `Bearer ${AUTH_TOKEN}`;
+    if (got.length !== want.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
 }
 
 const app = express();

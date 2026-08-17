@@ -4,5 +4,7 @@
   "model": "glm-4.6v",
   "chat_path": "/chat/completions",
   "providers": [],
-  "_comment": "默认模型 glm-4.6v（付费，稳定）。若想省钱：把 model 改为 glm-4.6v-flash（免费但不收费调，高峰可能限流），或按 docs/CONFIG.md 配置'免费为主+付费兜底'。"
+  "_comment": "默认模型 glm-4.6v（付费，稳定）。若想省钱：把 model 改为 glm-4.6v-flash（免费但不收费调，高峰可能限流），或按 docs/CONFIG.md 配置'免费为主+付费兜底'。",
+  "_comment_disable_json_mode": "provider 不支持 response_format=json_object 时（如 Ollama），加 'disable_json_mode': true 跳过；base_url 含 127.0.0.1:11434 或 name 含 ollama 时会自动识别无需配置。",
+  "_example_ollama_provider": "在 providers[] 里加：{ 'name':'ollama-local', 'base_url':'http://127.0.0.1:11434/v1', 'api_key':'ollama', 'model':'llama3.2-vision', 'disable_json_mode': true }"
 }

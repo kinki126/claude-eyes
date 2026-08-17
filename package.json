@@ -1,6 +1,6 @@
 {
   "name": "claude-eyes",
-  "version": "1.2.1",
+  "version": "1.4.0",
   "description": "Give Claude Code eyes — analyze local screenshots via an MCP tool + vision LLM bridge, with automatic continue/stop control.",
   "keywords": [
     "claude-code",
@@ -19,7 +19,7 @@
   "scripts": {
     "setup": "node setup.mjs",
     "start": "node zhipu-bridge-api.js",
-    "test": "node --test",
+    "test": "node --test --test-isolation=process",
     "smoke": "node mcp-image-analyzer/smoke/mcp-smoke.mjs",
     "smoke:remote": "node mcp-image-analyzer/smoke/server-http-smoke.mjs"
   },

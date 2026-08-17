@@ -2,6 +2,68 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.4.0] - 2026-08-17
+
+### 新增
+
+- **可观测性 /metrics 端点**：bridge 暴露 `/metrics`，返回 JSON 报告（uptime / total_requests / total_errors / error_rate / cache_hit_rate / latency_p50/p95/p99_ms / by_task / by_provider / by_user / error_types），10 分钟滚动窗口。配 Prometheus + Grafana 直接看 QPS / P95 / 错误率。
+- **`X-Request-Id` 贯穿**：每个 bridge 响应带 `X-Request-Id` 头（客户端传入则原样回，否则自动生成 `r-<ts>-<rand>`）；响应 `meta.request_id` 同步透传；usageLog / historyLog 都记录 request_id，便于跨日志排查"哪一环慢"。MCP 工具自动生成 `mcp-<uuid>` 传给 bridge。
+- **task 自动路由**：bridge 扫描 `desc` + `focus` 关键词，自动把 `general` 切到对应专项 task——用户没显式传 task 时尤其实用：
+  - 报错 / 错误 / exception / stack trace / 崩溃 / traceback / 错误码 / panic / fatal → `error`
+  - 对比 / diff / 之前 / 之后 / 差异 / 比较 / before / after / 变化 → `diff`
+  - 文字 / 提取文字 / ocr / 转录 / 识别文字 / 内容是什么 → `ocr`
+  - 界面 / 布局 / 按钮 / 走查 / 元素 / 组件 / 样式 → `ui`
+  - 用户显式传 task 时永远以用户指定为准。
+- **分析历史持久化**：每次成功的分析（非 force_action）自动落盘到 `<项目根>/.claude-eyes/history.jsonl`，每行一条 JSON（含 ts / request_id / user / md5 / task / action / analysis / keywords / regions / cache / latency_ms）。用户说"昨天那张 TypeError 的图重新看一下"→ Claude 可以 grep history 找 md5 重新分析（1 小时内 cache hit 秒回）。
+- **图像格式自适应**：bridge 按 source media type 自动选输出格式——照片类（jpeg/webp 来源且无 alpha）转 WebP q=80，体积降 80%+，传输/成本受益；UI/文字截图保持 PNG 无损，文字清晰。`chooseFormat()` 启发式判断。
+- **超长图切片**：长宽比 > 3 的图按高度（竖长）或宽度（横长）切成 2-5 段，每段间 10% 重叠避免关键信息被切到中间；每段独立压缩保持清晰度。`sliceLongImage()` 仅对单图启用（多图场景保持原样避免顺序混乱）。响应 `meta.slices` 字段透传实际切片数。整页网页截图 / 长报错堆栈 / 聊天记录截图文字识别率大增。
+- **OCR 二值化预处理**：`task=ocr` 时对图做灰度 + 直方图均衡 + 阈值二值化再传给模型，彩色背景上的文字、小字、密集文字识别率立升。`ocrPreprocess()` 仅对 ocr task 启用，其他 task 保留原色（UI 需要看颜色判断按钮状态/品牌色）。
+
+### 修复
+
+- **`isCircuitOpen` 状态误删 bug**：改前 `openUntil=0`（未熔断状态）时 `Date.now() > 0` 会触发"窗口到期"分支 delete 状态，导致 `markFailure` 累积的失败计数被悄悄清零，**熔断永远触发不了**。改后 `if (s.openUntil === 0) return false;` 未熔断状态保留 failures 计数。测试驱动发现。
+
+### 测试
+
+- 新增 `vision-client.test.mjs`（20 项）：熔断状态机流转、provider failover 链路、重试 2 次后成功、连续 3 次失败触发熔断、熔断中跳过、providerErrors 透传
+- 新增 `cache-lru.test.mjs`（9 项）：cache/imgCache LRU 淘汰、读命中刷新 LRU、TTL 过期
+- 新增 `crop-enlarge.test.mjs`（10 项）：cropAndEnlarge 整图/半图/越界/1x1/无效输入/bbox 0 宽度
+- 新增 `metrics.test.mjs`（8 项）：/metrics 端点存在、零计数、计数累加、p50/p95/p99、X-Request-Id 客户端传入/自动生成、/metrics 自身不计入请求
+- 新增 `ux-routing-history.test.mjs`（11 项）：routeTaskByContext 显式优先 / 关键词命中 / 无匹配保持 general / 多语言 / history 不落盘 force_action
+- 新增 `image-processing.test.mjs`（14 项）：chooseFormat 照片/UI/带 alpha/无效、sliceLongImage 正方/横长/竖长/比例 ≤3/极长/无效、ocrPreprocess 输出格式/尺寸/无效
+- `npm test` 改用 `--test-isolation=process`：每个测试文件独立进程，避免多文件并行操作模块级 Map 互相污染（跨平台都受益）
+- `analyzeImage()` 加 `axiosInstance` 注入参数，便于 mock HTTP 不调真实模型
+
+### 文档
+
+- SKILL.md 新增 1.1（task 自动路由）/ 1.2（多图打标签）/ 1.3（分析历史）三节
+- vision-client.js 导出 `_CIRCUIT` / `_FAILURE_THRESHOLD` / `_resetCircuit` 便于测试
+
+## [1.3.0] - 2026-08-17
+
+### 新增
+
+- **`response_format: json_object` 强制 JSON 输出**：vision-client 调用上游模型时默认开启 `response_format: { type: 'json_object' }`，主流云厂商（智谱 / OpenAI / 通义 / 豆包等）模型直接吐合法 JSON，解析失败率显著下降。Ollama 等不支持的 provider 可在 `vision-config.json` 里加 `"disable_json_mode": true` 跳过；本地 11434 端口/name 含 ollama 时会自动识别并关。
+- **Provider 指数退避重试 + 熔断**：对 429/5xx/超时/连接重置等瞬时错误，同一 provider 内先重试 2 次（500ms → 1s 指数退避）再切下一个；连续失败 3 次的 provider 被熔断 5 分钟，期间直接跳过不再尝试，5 分钟后放一次试探。原先死代码 `isTransientError()` 正式启用。
+- **图片字节缓存 + 多图并行压缩**：同一张图换 desc/focus 第二次分析时，sharp 压缩步骤直接命中缓存跳过（TTL = 分析缓存的 2 倍）；多图压缩从 `for...of` 串行 await 改为 `Promise.all` 并行，6 张图总耗时 ≈ 单张耗时。响应 `images[].compressed_bytes` 字段从恒为 null 改为实际填充。
+- **`crop_bbox` 精准放大追问**：bridge `/analyze` 接受 `crop_bbox={x,y,w,h}`（归一化，0~1 / 0~100 / 0~1000 尺度自适应），按 bbox 裁剪第 0 张图原图并放大到最小边 800px 后再交给模型。配合上一轮 `regions[].bbox` 做"细看某区域"的多轮追问，精度大增。响应 `meta` 加 `crop_bbox` 和 `cropped` 字段。
+- **`POST /analyze` 远程上传**：修复远程部署 path 漏洞——集中式 MCP 下 bridge 服务器读不到员工本地文件，新增 `POST /analyze` 接口收 base64 图片字节（body 上限 64MB）。MCP 工具 schema 加 `image_base64` / `images_base64` 参数，skill 自动判断走 POST 还是 GET。
+- **远程 HTTP 鉴权用 `timingSafeEqual`**：`server-http.js` 的 `authorized()` 从 `===` 改为 `crypto.timingSafeEqual`，消除时序攻击风险。
+
+### 文档
+
+- SKILL.md 新增 `crop_bbox` / `image_base64` 参数说明 + 1.6 节「精准放大追问」引导
+- docs/DEPLOY.md 修正方案 A 描述：员工本地路径在 bridge 服务器读不到，远程模式必须用 base64 上传
+- docs/CONFIG.md 补 `disable_json_mode` 字段、`POST /analyze` 调试端点、重试与熔断行为说明
+- docs/USAGE.md 补 `crop_bbox` / `image_base64` 用法场景
+- README.md Features 补 3 项新能力
+- vision-config.example.json 加 `disable_json_mode` 注释示范
+
+### 测试
+
+- 新增 `parseCropBbox` 单测（尺度自适应 / 越界修正 / 非法返回 null）
+- 新增 POST /analyze smoke（base64 上传 + crop_bbox 端到端）
+
 ## [1.2.1] - 2026-08-14
 
 ### 修复

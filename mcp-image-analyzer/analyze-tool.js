@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import axios from 'axios';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -66,10 +67,12 @@ export async function ensureBridge() {
  * @param {string} [opts.user]          兜底用户标识（远程由 userContext 覆盖）
  */
 export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, user = MCP_USER } = {}) {
-    return async ({ path, paths, description, task, lang, focus }) => {
+    return async ({ path, paths, description, task, lang, focus, crop_bbox, image_base64, images_base64 }) => {
+        // 图片来源：本地路径 或 直接 base64（远程模式下 bridge 拿不到客户端本地文件时用）
+        const hasBase64 = Boolean(image_base64) || (Array.isArray(images_base64) && images_base64.length);
         const imgList = (Array.isArray(paths) && paths.length) ? paths.slice(0, 6) : (path ? [path] : []);
-        if (imgList.length === 0) {
-            return { isError: true, content: [{ type: 'text', text: '缺少参数：请传 path（单张）或 paths（多张，最多 6 张，均为本地图片绝对路径）。' }] };
+        if (imgList.length === 0 && !hasBase64) {
+            return { isError: true, content: [{ type: 'text', text: '缺少参数：请传 path/paths（本地路径） 或 image_base64/images_base64（base64 内容）。' }] };
         }
 
         if (!(await ensureBridge())) {
@@ -80,7 +83,57 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
         }
 
         try {
-            // 拼 URL 一律走 URLSearchParams（自动编码 Windows 反斜杠/冒号）
+            const b64List = hasBase64
+                ? (Array.isArray(images_base64) ? images_base64.slice(0, 6) : [image_base64])
+                : [];
+
+            // 若有 base64 → 走 POST /analyze（multipart 不安全，直接 JSON body）
+            if (hasBase64) {
+                const requestId = `mcp-${randomUUID()}`;
+                const reqBody = {
+                    images: b64List.map(b64 => ({ base64: b64 })),
+                    task: task || 'general',
+                    lang: lang || 'zh',
+                    desc: description || '',
+                    focus: focus || '',
+                    crop_bbox
+                };
+                const activeUser = userContext.getStore()?.user || user;
+                if (activeUser) reqBody.user = activeUser;
+                const resp = await axios.post(`${bridgeBaseUrl}/analyze`, reqBody, {
+                    timeout: 65000,
+                    headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId }
+                });
+                const body = resp.data;
+                if (!body || body.ok === false) {
+                    throw new Error(body?.error || `桥接返回异常: HTTP ${resp.status}`);
+                }
+                const out = {
+                    images: body.images || [],
+                    image: body.image,
+                    analysis: body.analysis.text || body.analysis.raw || '(模型未返回分析内容)',
+                    keywords: body.analysis.keywords || [],
+                    annotated_text: body.analysis.annotated_text || '',
+                    verbatim: body.analysis.verbatim || '',
+                    regions: body.analysis.regions || [],
+                    verdict: body.analysis.verdict ?? null,
+                    evidence: body.analysis.evidence || '',
+                    control: body.control,
+                    meta: {
+                        model: body.meta.model,
+                        provider: body.meta.provider,
+                        parse: body.meta.parse,
+                        cache: body.meta.cache,
+                        image_count: body.meta.image_count || b64List.length,
+                        latency_ms: body.meta.latency_ms,
+                        request_id: body.meta.request_id || requestId
+                    }
+                };
+                return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };
+            }
+
+            // 本地路径 → 继续走 GET /analyze（向后兼容）
+            const requestId = `mcp-${randomUUID()}`;
             const qs = new URLSearchParams();
             if (imgList.length === 1) {
                 qs.set('path', imgList[0]);
@@ -89,12 +142,16 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
             }
             if (description) qs.set('desc', description);
             if (focus) qs.set('focus', focus);
+            if (crop_bbox && typeof crop_bbox === 'object') qs.set('crop_bbox', JSON.stringify(crop_bbox));
             qs.set('task', task || 'general');
             qs.set('lang', lang || 'zh');
             const activeUser = userContext.getStore()?.user || user;
             if (activeUser) qs.set('user', activeUser);
 
-            const resp = await axios.get(`${bridgeBaseUrl}/analyze?${qs.toString()}`, { timeout: 65000 });
+            const resp = await axios.get(`${bridgeBaseUrl}/analyze?${qs.toString()}`, {
+                timeout: 65000,
+                headers: { 'X-Request-Id': requestId }
+            });
             const body = resp.data;
             if (!body || body.ok === false) {
                 throw new Error(body?.error || `桥接返回异常: HTTP ${resp.status}`);
@@ -117,7 +174,8 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
                     parse: body.meta.parse,
                     cache: body.meta.cache,
                     image_count: body.meta.image_count || imgList.length,
-                    latency_ms: body.meta.latency_ms
+                    latency_ms: body.meta.latency_ms,
+                    request_id: body.meta.request_id || requestId
                 }
             };
             return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };

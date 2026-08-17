@@ -33,12 +33,56 @@ description: 分析本地截图/图片（报错、界面、文字），支持多
 ## 1. 调用 `analyze_image`
 
 传入本地图片**绝对路径**（Windows 格式，如 `<项目根>\shot.png`，直接透传，不要转成 POSIX 风格）。可选参数：
-- `path`：单张（与 `paths` 二选一）
+- `path`：单张（与 `paths` 或 `image_base64` 三选一）
 - `paths`：多张（最多 6 张），模型会一起分析/对比
+- `image_base64` / `images_base64`：图片 base64 内容（不带 `data:image/png;base64,` 前缀）。**远程 MCP 模式下** bridge 服务器读不到客户端本地文件，必须改用 base64 上传；本地模式优先用 `path`/`paths`
 - `task`：`error`=报错定位 / `ui`=界面走查 / `ocr`=纯文字提取 / `diff`=多图差异对比 / `general`=全面分析（默认）
 - `lang`：`zh`（默认）或 `en`
 - `description`：用户的文字描述，会透传给视觉模型
 - `focus`：重点关注区域/问题（自然语言，如"左上角红框里的报错文字""第 3 个按钮的文案"），让视觉模型定向细看，多轮追问用
+- `crop_bbox`：按归一化 bbox `{x,y,w,h}`（0.0~1.0）裁剪第 0 张图并放大后再分析，**取值来自上一轮返回的 `regions[].bbox`**，配合 `focus` 做精准放大追问
+
+### 1.1 task 自动路由（用户不说也能选对）
+
+bridge 会扫描 `description` + `focus` 里的关键词，自动把 `general` 切到对应专项 task，**用户没显式传 task 时尤其实用**：
+
+| 关键词（任一命中即切） | 自动切到 task |
+|---|---|
+| 报错 / 错误 / exception / stack trace / 崩溃 / traceback / 错误码 / error code / panic / fatal | `error` |
+| 对比 / diff / 之前 / 之后 / 差异 / 比较 / before / after / 变化 | `diff` |
+| 文字 / 提取文字 / ocr / 转录 / 识别文字 / 内容是什么 | `ocr` |
+| 界面 / 布局 / 按钮 / 走查 / ui review / 元素 / 组件 / 样式 | `ui` |
+
+- 用户**显式传 `task`** 时永远以用户指定为准，路由不覆盖。
+- Claude 在自己构造 `description` 时可以**主动写关键词**触发路由（如"分析这张报错截图" → 自动切 error），不需要再传 `task`。
+
+### 1.2 多图打标签（让模型分清每张图的角色）
+
+多图分析时，**不要只传 paths 让模型瞎猜**——在 `description` 里**显式给每张图打标签**：
+
+```
+# 用户："对比 a.png 和 b.png，看修复前后差异"
+description = "图1: 修复前 / 图2: 修复后"
+paths = ["a.png", "b.png"]
+task = "diff"  # 或不传，自动路由命中"对比"
+```
+
+标签来源优先级：
+1. **用户消息里的语境**（"修复前/后""之前/之后""设计稿/实现"等）→ 直接用；
+2. **截图时间序**（3 张按 mtime 排序）→ 自动标"图1: 最早 / 图2: 中间 / 图3: 最新"；
+3. 都没有 → 退化为"图1 / 图2 / 图3"。
+
+打标签让模型清楚每张图的角色，diff/对比场景准确率显著提升。
+
+### 1.3 分析历史（自动落盘，可回看）
+
+每次成功的分析（非 `force_action`）都会自动落盘到 `<项目根>\.claude-eyes\history.jsonl`，每行一条 JSON：
+
+```jsonl
+{"ts":"2026-08-17T10:23:00Z","request_id":"r-...","user":"local","md5":"abc...","image_count":1,"task":"error","action":"stop","analysis":"...","keywords":["TypeError","renderX"],"regions":[...],"cache":"miss","latency_ms":1234}
+```
+
+**回看历史**：用户说"昨天那张 TypeError 的图重新看一下" → Claude 可以 `Get-Content .claude-eyes\history.jsonl | Select-String "TypeError"` 找到 md5/路径线索，再用 `analyze_image` 重新跑（1 小时内 cache=hit 秒回）。
 
 ## 1.5 多轮追问（第一轮拿不准就带 `focus` 再问）
 
@@ -54,6 +98,29 @@ description: 分析本地截图/图片（报错、界面、文字），支持多
 - `focus: "浏览器地址栏与状态栏，确认是否加载失败"`
 
 视觉模型会把 `focus` 当最高优先级、定向细看并围绕它作答。追问 1–2 轮通常足够，不要无限循环。
+
+## 1.6 精准放大追问（带 `crop_bbox`，比单 `focus` 看得更清）
+
+`focus` 只告诉模型"看哪里"，模型仍在整张缩放后的图上找——超长截图或小区域会糊成马赛克。**若上一轮返回了 `regions` 且带 `bbox`，把它作为 `crop_bbox` 传回**，bridge 会从原图按 bbox 裁剪并放大到最小边 800px 后再交给模型：
+
+```
+# 第一轮返回里出现：
+"regions": [{ "label": "报错堆栈", "bbox": { "x": 0.05, "y": 0.02, "w": 0.40, "h": 0.12 } }, ...]
+
+# 第二轮（追问该区域细节）：
+analyze_image(path=同一张, focus="红框里的报错文字一字不差转录",
+              crop_bbox={x:0.05, y:0.02, w:0.40, h:0.12})
+```
+
+**触发条件**（满足任一即用 `crop_bbox` 而非裸 `focus`）：
+- 第一轮 `regions` 里有 `bbox`，且对应区域 < 整图 1/3；
+- 报错堆栈/UI 文字在第一轮 `verbatim` 里残缺、但 `regions` 里定位到了该区域；
+- 用户明确说"细看左上角那块""放大第 2 个按钮"。
+
+**注意**：
+- `crop_bbox` 只作用于第 0 张图（多图场景下其他图按原样传）；
+- bbox 坐标尺度自适应（0~1 / 0~100 / 0~1000 均可），但**推荐直接用第一轮返回的归一化值（0~1）**，省心；
+- `meta.cropped: true` 表示 bridge 实际执行了裁剪放大，可据此判断本轮结果是否来自放大版。
 
 ## 2. 向用户**完整呈现**返回的 `analysis` 内容
 

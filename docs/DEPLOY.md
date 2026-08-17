@@ -41,8 +41,25 @@ node server-http.js
 ```
 
 - `X-User` 会落到桥接的 `?user=`，**限流 / 用量日志按人隔离**。
-- 员工体验与本地完全一致：同一个 `analyze_image` 工具、同一个停/续行为。
+- **远程模式下：员工本地路径在 bridge 服务器上读不到**，必须用 base64 上传图片（见下方"远程模式图片上传"）。员工的 `analyze_image` 调用体验与本地一致，但 `path`/`paths` 参数在远程模式下不可用。
 - 员工机 Node 版本与本方案无关。
+
+### 远程模式图片上传（关键）
+
+集中式远程 MCP 下，bridge 跑在服务器、图片在员工本地，原 `?path=` 方式无法工作。`analyze_image` 工具为此加了 `image_base64` / `images_base64` 参数：
+
+```json
+{
+  "image_base64": "iVBORw0KGgo...(不带 data:image/png;base64, 前缀)",
+  "description": "看下这个报错",
+  "task": "error"
+}
+```
+
+- 单张用 `image_base64`，多张用 `images_base64: [b64, b64, ...]`（最多 6 张）
+- bridge 走 `POST /analyze`，body 上限 64MB（足够 6 张压缩前的高清截图）
+- 完整字段：`{ images: [{base64}], task?, lang?, desc?, focus?, crop_bbox?, user?, force_action?, raw? }`
+- skill 会自动判断：传了 `image_base64` 走 POST，传了 `path` 走 GET（本地模式向后兼容）
 
 ## 方案 B：本地分发包
 

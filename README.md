@@ -18,12 +18,18 @@ When your Claude Code runs on a non-vision backend (e.g. DeepSeek), it can't see
 
 - 🖼️ **Analyze images via function calling** — Claude natively calls the `analyze_image` MCP tool; no model swap needed
 - 🔁 **Automatic continue/stop** — the vision model decides per image whether the flow continues or ends
-- 📋 **Three ways to feed an image** — VS Code panel paste (Trae-style) / screenshot auto-save / direct path
+- 📋 **Four ways to feed an image** — VS Code panel paste (Trae-style) / screenshot auto-save / direct path / **base64 upload (remote MCP)**
 - 🔌 **Provider-agnostic** — depends only on OpenAI-compatible `chat/completions` + vision (`image_url` base64); switch providers via config (Zhipu / OpenAI / Qwen-VL / DeepSeek-VL / Ollama / vLLM)
-- ⚙️ **Ops-ready** — dedup cache, per-user rate limiting, usage logs, health check, multi-provider failover, auto-spawned bridge
+- ⚙️ **Ops-ready** — dedup cache + image-byte cache, per-user rate limiting, usage logs, health check, multi-provider failover with **retry + circuit breaker**, auto-spawned bridge
+- 📊 **Observability** — `/metrics` endpoint exports QPS / latency p50/p95/p99 / error rate / by-task / by-provider / by-user (10-min rolling window); `X-Request-Id` traces every request across MCP → bridge → LLM logs
+- 🧠 **Smart task routing** — bridge scans `description` / `focus` keywords and auto-routes `general` → `error` / `diff` / `ocr` / `ui` (user-specified `task` always wins)
+- 🗂️ **Analysis history** — every successful analysis is appended to `.claude-eyes/history.jsonl` (ts / md5 / task / analysis / regions / etc.); grep it to revisit "the TypeError screenshot from yesterday"
 - 🧩 **Portable** — all paths derived from the current directory + home directory; one-command `setup.mjs`; move the whole folder anywhere
-- 🔍 **Multi-turn focus + coordinate localization** — `focus` zooms the vision model into a specific region; `regions` returns normalized bboxes that map visual positions to code coordinates
+- 🔍 **Multi-turn focus + coordinate localization + crop-zoom** — `focus` zooms the vision model into a region; `regions` returns normalized bboxes; **`crop_bbox` crops & enlarges the region for the next turn** (sharp-based, min edge 800px) for high-precision follow-up
+- 🖼️ **Adaptive image processing** — photos → WebP q=80 (80%+ smaller); UI/text → PNG lossless; long screenshots (aspect ratio > 3) auto-sliced into 2-5 overlapping segments; `task=ocr` runs grayscale + histogram equalization + binarization for sharper text recognition
 - 🧾 **Verbatim + verification** — `verbatim` transcribes error stacks/codes verbatim (no lossy summarization); `task=verify` sends a conclusion back to the vision model for confirmation (`verdict: true/false/uncertain`)
+- 📦 **JSON mode by default** — `response_format: { type: 'json_object' }` enabled for supported providers (auto-disabled for Ollama); 5-layer parser fallback still in place for unsupported/edge cases
+- 🔐 **Remote-ready** — `POST /analyze` accepts base64 images (64MB body limit); `server-http.js` auth uses `crypto.timingSafeEqual` to prevent timing attacks
 
 ## Architecture
 
