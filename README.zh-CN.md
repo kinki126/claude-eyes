@@ -28,6 +28,12 @@
 - 🔍 **多轮追问 + 坐标定位 + 精准放大**：`focus` 让视觉模型定向细看；`regions` 输出归一化 bbox；**`crop_bbox` 按上一轮 bbox 裁剪原图并放大到最小边 800px**（v1.3.0+），多轮追问精度大增
 - 🖼️ **图像处理自适应**（v1.4.0）：照片 → WebP q=80（体积降 80%+）；UI/文字 → PNG 无损；长截图（长宽比 > 3）自动切片 2-5 段；`task=ocr` 自动二值化预处理，文字识别更准
 - 🧾 **原文兜底 + 反向验证**：`verbatim` 逐字转录报错堆栈/错误码，不被概括吞掉；`task=verify` 把推理结论发回视觉模型核验（verdict: true/false/uncertain）
+- 🧾 **diff 结构化输出**（v1.6.0）：`task=diff` 返回 `diffs[]` 数组，逐项列出差异（item/from/to/change_type/bbox），Claude 可直接用 markdown 表格呈现，不再是一坨散文
+- ✅ **断言式 verify**（v1.6.0）：`task=verify` 支持 `description: "assert=按钮是否为红色"`，返回结构化 `verify: { passed: true|false|null, reason }`（与 verdict 对齐；uncertain 时 passed=null），便于截图回归测试直接判过没过
+- 🗂️ **历史搜索**（v1.6.0）：`GET /history?task=&keyword=&since=&until=&limit=` 端点 + `search_history` MCP 工具，按 task/关键词/时间范围搜索落盘的 `history.jsonl`，替代手动 grep
+- 🔄 **多轮追问上下文继承**（v1.5.0）：bridge 按图片 md5 缓存上一轮分析上下文，同图追问（带 focus/crop_bbox）自动注入前一轮的 task/keywords/regions/analysis 摘要，用户不用重复"就是刚才那张图的 xxx 位置"
+- 📢 **阶段进度通知**（v1.5.0）：`analyze_image` / `locate_code` / `search_history` 在关键阶段推送 `notifications/message`（准备 → 桥接就绪 → 调用模型 → 完成），降低 MCP 客户端的感知延迟
+- 🔍 **代码定位**（v1.5.0）：`locate_code` MCP 工具在项目代码里搜关键词（ripgrep / findstr / grep 回退），返回 `{ file, line, match }` 候选，让 Claude 从截图报错直接跳到源码行
 - 📦 **默认 JSON 模式**（v1.3.0+）：默认启用 `response_format: json_object`，模型直接吐合法 JSON；Ollama 等不支持的 provider 自动关闭，bridge 仍靠 5 层 fallback 兜底
 - 🔐 **远程就绪**：`POST /analyze` 收 base64 图片（body 上限 64MB）；`server-http.js` 鉴权用 `crypto.timingSafeEqual` 防时序攻击
 
