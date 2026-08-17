@@ -23,6 +23,13 @@ const BRIDGE_SCRIPT_PATH = process.env.BRIDGE_SCRIPT_PATH
 const AUTO_SPAWN_BRIDGE = process.env.AUTO_SPAWN_BRIDGE !== '0';
 const MCP_USER = process.env.MCP_USER || '';
 
+// analyze_image 工具对外暴露的全部参数（测试锚点 + 文档参考）。
+// bridge 端额外接受 user/force_action/raw/desc 等 URL/body 参数，但工具层不暴露给 Claude。
+const SUPPORTED_TOOL_PARAMS = [
+    'path', 'paths', 'image_base64', 'images_base64',
+    'task', 'lang', 'description', 'focus', 'crop_bbox'
+];
+
 // 远程 HTTP 入口通过 userContext.run({user}) 注入每个请求的 X-User
 export const userContext = new AsyncLocalStorage();
 

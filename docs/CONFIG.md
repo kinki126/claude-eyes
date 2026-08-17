@@ -186,11 +186,11 @@ curl -X POST http://127.0.0.1:8765/analyze \
 - **图片字节缓存**：同一张图换不同 `desc`/`focus`/`crop_bbox` 时，sharp 压缩结果直接命中字节缓存跳过，TTL 是分析缓存的 2 倍。`meta.cache` 仍按"最终分析结果是否命中"标记，字节缓存命中不影响 `meta.cache` 值。
 - **限流**：按 `?user=` 标识计数，超限返回 HTTP 429 + `Retry-After`；本地默认不限。
 - **用量日志**：每天一个 JSONL 文件，记录 user / md5 / task / provider / token 用量 / action / 延迟 / request_id。
-- **分析历史**（v1.4.0 新增）：每次成功的分析（非 `force_action`）追加一行到 `<项目根>\.claude-eyes\history.jsonl`，含 ts / request_id / user / md5 / task / action / analysis（截断 2000 字）/ keywords / regions（前 5 个）/ cache / latency_ms。便于回看与重跑。
+- **分析历史**（v1.4.0 新增，函数 `historyLog`）：每次成功的分析（非 `force_action`）追加一行到 `<项目根>\.claude-eyes\history.jsonl`，含 ts / request_id / user / md5 / task / action / analysis（截断 2000 字）/ keywords / regions（前 5 个）/ cache / latency_ms。便于回看与重跑。
 - **停/续**：响应 `control.action` 由视觉模型自主给出；桥接无状态，停/续由 Claude 侧循环执行。
 - **重试 + 熔断**：429/5xx/超时/连接重置等瞬时错误，同一 provider 内先重试 2 次（500ms → 1s 指数退避），仍失败再切下一个 provider；连续失败 3 次的 provider 被熔断 5 分钟，期间直接跳过，5 分钟后放一次试探。错误信息会出现在抛出的 `Error.message` 里（`所有视觉提供商均调用失败: <name>: <原因> | <name>: <原因>`）。
 - **JSON 模式**：默认启用 `response_format: json_object`，模型直接吐合法 JSON；不支持的 provider 可配 `disable_json_mode: true` 关闭，bridge 仍靠 5 层 fallback 兜底解析。
-- **task 自动路由**（v1.4.0 新增）：用户没显式传 `task`（或传 `general`）时，bridge 扫描 `desc` + `focus` 关键词自动切到对应专项 task（报错→`error`、对比→`diff`、文字→`ocr`、界面→`ui`）。用户显式传 task 时永远以用户指定为准。
-- **图像格式自适应**（v1.4.0 新增）：bridge 按图本身 metadata 选输出格式——照片类（jpeg/webp 来源且无 alpha 通道）转 WebP q=80，体积降 80%+；UI/文字截图保持 PNG 无损，文字清晰。
-- **超长图切片**（v1.4.0 新增）：单图长宽比 > 3 时按长边切成 2-5 段，每段间 10% 重叠避免关键信息被切到中间；每段独立压缩保持清晰度。响应 `meta.slices` 透传实际切片数。仅单图启用（多图场景保持原样避免顺序混乱）。
-- **OCR 二值化预处理**（v1.4.0 新增）：`task=ocr` 时对图做灰度 + 直方图均衡 + 阈值二值化再传给模型，彩色背景上的文字、小字、密集文字识别率立升。其他 task 保留原色（UI 需要看颜色判断按钮状态/品牌色）。
+- **task 自动路由**（v1.4.0 新增，函数 `routeTaskByContext`）：用户没显式传 `task`（或传 `general`）时，bridge 扫描 `desc` + `focus` 关键词自动切到对应专项 task（报错→`error`、对比→`diff`、文字→`ocr`、界面→`ui`）。用户显式传 task 时永远以用户指定为准。
+- **图像格式自适应**（v1.4.0 新增，函数 `chooseFormat`）：bridge 按图本身 metadata 选输出格式——照片类（jpeg/webp 来源且无 alpha 通道）转 WebP q=80，体积降 80%+；UI/文字截图保持 PNG 无损，文字清晰。
+- **超长图切片**（v1.4.0 新增，函数 `sliceLongImage`）：单图长宽比 > 3 时按长边切成 2-5 段，每段间 10% 重叠避免关键信息被切到中间；每段独立压缩保持清晰度。响应 `meta.slices` 透传实际切片数。仅单图启用（多图场景保持原样避免顺序混乱）。
+- **OCR 二值化预处理**（v1.4.0 新增，函数 `ocrPreprocess`）：`task=ocr` 时对图做灰度 + 直方图均衡 + 阈值二值化再传给模型，彩色背景上的文字、小字、密集文字识别率立升。其他 task 保留原色（UI 需要看颜色判断按钮状态/品牌色）。

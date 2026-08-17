@@ -13,6 +13,10 @@ logs/
 node_modules/
 mcp-image-analyzer/node_modules/
 
+# ---- 临时测试输出 / 本地缓存 ----
+test_output.txt
+.claude-eyes/
+
 # ---- 系统 / 编辑器 ----
 Thumbs.db
 Desktop.ini

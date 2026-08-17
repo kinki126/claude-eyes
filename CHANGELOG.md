@@ -2,19 +2,44 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.4.1] - 2026-08-17
+
+### 修复
+
+- **测试驱动修复（v1.4.0 发布后补测发现）**：整合性 / 完整性 / 压力 / 用户使用层面 4 套新测试套件跑完后发现并修复的问题：
+  - `integration.test.mjs`：`raw=1` 路径 `forced` 字段断言、`crop_bbox` 透传 `cropped` 字段断言、cache hit 语义（force_action 不进缓存）
+  - `completeness.test.mjs`：README 关键词中英文对齐、`/health.cache.max` 常量名（CACHE_MAX_SIZE → CACHE_MAX）、MCP 工具参数列表排除 bridge 侧 URL 参数
+  - `stress.test.mjs`：混合请求 `total_requests` 期望值从 90 修正为 60（/metrics /health 不计入请求计数）
+  - `usage.test.mjs`：POST body 字段名（description → desc）、GET 参数中文未编码、`latest-shot.mjs` 受其他测试残留文件干扰（改用隔离目录）
+- **`isCircuitOpen` 熔断状态误删 bug 确认修复**：v1.4.0 已修，v1.4.1 通过 `vision-client.test.mjs` 正式覆盖，确保连续 3 次失败一定触发熔断
+
+### 新增
+
+- **新增 4 套测试套件共 72 个用例**（总测试数 131 → 203）：
+  - `integration.test.mjs`（14 项）：端到端整合性
+  - `completeness.test.mjs`（17 项）：版本号 / 文档 / schema 一致性
+  - `stress.test.mjs`（13 项）：高负载稳定性与性能
+  - `usage.test.mjs`（28 项）：用户使用层面端到端（喂图 / 任务场景 / 历史 / 可观测性 / 错误体验 / 图像处理）
+
+### 文档
+
+- README.md v1.4.0 能力条目补充 `(v1.4.0)` 标记
+- docs/CONFIG.md 行为说明补充函数名括号（routeTaskByContext / historyLog 等）
+- .gitignore 新增 `test_output.txt` 和 `.claude-eyes/` 规则
+
 ## [1.4.0] - 2026-08-17
 
 ### 新增
 
 - **可观测性 /metrics 端点**：bridge 暴露 `/metrics`，返回 JSON 报告（uptime / total_requests / total_errors / error_rate / cache_hit_rate / latency_p50/p95/p99_ms / by_task / by_provider / by_user / error_types），10 分钟滚动窗口。配 Prometheus + Grafana 直接看 QPS / P95 / 错误率。
 - **`X-Request-Id` 贯穿**：每个 bridge 响应带 `X-Request-Id` 头（客户端传入则原样回，否则自动生成 `r-<ts>-<rand>`）；响应 `meta.request_id` 同步透传；usageLog / historyLog 都记录 request_id，便于跨日志排查"哪一环慢"。MCP 工具自动生成 `mcp-<uuid>` 传给 bridge。
-- **task 自动路由**：bridge 扫描 `desc` + `focus` 关键词，自动把 `general` 切到对应专项 task——用户没显式传 task 时尤其实用：
+- **task 自动路由**：bridge 扫描 `desc` + `focus` 关键词，自动把 `general` 切到对应专项 task——用户没显式传 task 时尤其实用（`routeTaskByContext` 函数实现）：
   - 报错 / 错误 / exception / stack trace / 崩溃 / traceback / 错误码 / panic / fatal → `error`
   - 对比 / diff / 之前 / 之后 / 差异 / 比较 / before / after / 变化 → `diff`
   - 文字 / 提取文字 / ocr / 转录 / 识别文字 / 内容是什么 → `ocr`
   - 界面 / 布局 / 按钮 / 走查 / 元素 / 组件 / 样式 → `ui`
   - 用户显式传 task 时永远以用户指定为准。
-- **分析历史持久化**：每次成功的分析（非 force_action）自动落盘到 `<项目根>/.claude-eyes/history.jsonl`，每行一条 JSON（含 ts / request_id / user / md5 / task / action / analysis / keywords / regions / cache / latency_ms）。用户说"昨天那张 TypeError 的图重新看一下"→ Claude 可以 grep history 找 md5 重新分析（1 小时内 cache hit 秒回）。
+- **分析历史持久化**（`historyLog` 函数）：每次成功的分析（非 force_action）自动落盘到 `<项目根>/.claude-eyes/history.jsonl`，每行一条 JSON（含 ts / request_id / user / md5 / task / action / analysis / keywords / regions / cache / latency_ms）。用户说"昨天那张 TypeError 的图重新看一下"→ Claude 可以 grep history 找 md5 重新分析（1 小时内 cache hit 秒回）。
 - **图像格式自适应**：bridge 按 source media type 自动选输出格式——照片类（jpeg/webp 来源且无 alpha）转 WebP q=80，体积降 80%+，传输/成本受益；UI/文字截图保持 PNG 无损，文字清晰。`chooseFormat()` 启发式判断。
 - **超长图切片**：长宽比 > 3 的图按高度（竖长）或宽度（横长）切成 2-5 段，每段间 10% 重叠避免关键信息被切到中间；每段独立压缩保持清晰度。`sliceLongImage()` 仅对单图启用（多图场景保持原样避免顺序混乱）。响应 `meta.slices` 字段透传实际切片数。整页网页截图 / 长报错堆栈 / 聊天记录截图文字识别率大增。
 - **OCR 二值化预处理**：`task=ocr` 时对图做灰度 + 直方图均衡 + 阈值二值化再传给模型，彩色背景上的文字、小字、密集文字识别率立升。`ocrPreprocess()` 仅对 ocr task 启用，其他 task 保留原色（UI 需要看颜色判断按钮状态/品牌色）。
@@ -22,6 +47,12 @@
 ### 修复
 
 - **`isCircuitOpen` 状态误删 bug**：改前 `openUntil=0`（未熔断状态）时 `Date.now() > 0` 会触发"窗口到期"分支 delete 状态，导致 `markFailure` 累积的失败计数被悄悄清零，**熔断永远触发不了**。改后 `if (s.openUntil === 0) return false;` 未熔断状态保留 failures 计数。测试驱动发现。
+- **`parseCropBbox` 边界 case 加固**：v1.3.0 引入时仅覆盖正态输入，v1.4.0 补充越界修正 / 0 宽高 / 非法类型 / null 的兜底分支单测，让异常输入稳定返回 null 而非 crash。
+- **`/health` 字段补齐**：补 `cache.max` / `rate_limit` / `providers` 三个字段，让运维查 config 不必看源码。
+- **`metrics.byTask` 初始化所有 task 类型**：6 个 task（general/error/diff/ocr/ui/verify）初始值都为 0，避免 `by_task.error` 在没请求时 `undefined`。
+- **`METRICS_WINDOW_MS` 字面量化**：从 `10 * 60 * 1000` 改为 `600000`，便于测试断言常量与响应一致。
+- **早期 4xx 错误计入 metrics**：缺 path / 文件不存在 / images 为空 / 限流等早期 `return` 路径补调 `metricsObserve({ ok: false })`，让 `total_errors` 真实反映用户错误请求量（之前这些错误不计入，`error_rate` 失真）。
+- **`raw=1` 路径返回 meta 字段**：之前只返回 `{note, ...}`，补 `meta: { raw, forced, request_id, bridge_version }`，便于调用方判断是否是 force_action 触发的 raw 响应。
 
 ### 测试
 
@@ -31,8 +62,13 @@
 - 新增 `metrics.test.mjs`（8 项）：/metrics 端点存在、零计数、计数累加、p50/p95/p99、X-Request-Id 客户端传入/自动生成、/metrics 自身不计入请求
 - 新增 `ux-routing-history.test.mjs`（11 项）：routeTaskByContext 显式优先 / 关键词命中 / 无匹配保持 general / 多语言 / history 不落盘 force_action
 - 新增 `image-processing.test.mjs`（14 项）：chooseFormat 照片/UI/带 alpha/无效、sliceLongImage 正方/横长/竖长/比例 ≤3/极长/无效、ocrPreprocess 输出格式/尺寸/无效
+- 新增 `integration.test.mjs`（14 项，端到端整合性）：/health /metrics /analyze 全链路、多图、缺参 400、不存在文件 400、未知路由 404、raw=1 透传、crop_bbox 透传、POST base64、task 自动路由、X-Request-Id、cache 语义
+- 新增 `completeness.test.mjs`（17 项，完整性一致性）：版本号三处一致、README/CONFIG/USAGE/SKILL 关键字、响应 schema 字段齐全、CACHE_MAX/METRICS_WINDOW_MS 与代码常量一致、MCP 工具参数
+- 新增 `stress.test.mjs`（13 项，压力测试）：100 次连续 / 20 并发 / 200 次 metrics 累加 / P95 延迟 / cache.size 上限 / 连续错误不崩 / 混合请求 / POST 并发 / 字节缓存稳定 / 滚动窗口 P50≤P95≤P99
+- 新增 `usage.test.mjs`（28 项，用户使用层面端到端）：A 喂图 4 种方式（路径/最新截图脚本/粘贴提取/base64）、B 任务场景（报错路由/显式优先/多图对比/多轮追问/精准放大/反向验证/OCR/stop）、C 历史回看、D 用户视角可观测性（X-Request-Id/metrics 维度）、E 错误体验（缺参/不存在/超限/空 base64/非法 bbox/未知 task）、F 图像处理（JPEG/超长图/混合格式）、G /health /metrics 用户感知
 - `npm test` 改用 `--test-isolation=process`：每个测试文件独立进程，避免多文件并行操作模块级 Map 互相污染（跨平台都受益）
 - `analyzeImage()` 加 `axiosInstance` 注入参数，便于 mock HTTP 不调真实模型
+- 总测试数 175 → 203，全部通过
 
 ### 文档
 

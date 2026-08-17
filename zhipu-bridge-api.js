@@ -29,8 +29,9 @@ const RATE_LIMIT_PER_MIN = Number(process.env.RATE_LIMIT_PER_MIN || 0); // 0=不
 const RATE_LIMIT_PER_DAY = Number(process.env.RATE_LIMIT_PER_DAY || 0); // 0=不限
 const USAGE_LOG = process.env.USAGE_LOG !== '0';
 const LOG_DIR = process.env.LOG_DIR || path.join(__dirname, 'logs');
-const VERSION = '1.4.0';
-const [PRIMARY_CFG] = loadConfig(); // 仅用于 /health 展示
+const VERSION = '1.4.1';
+const ALL_PROVIDERS = loadConfig();                  // 全部 providers 链（/health 展示 + 主用第 0 项）
+const [PRIMARY_CFG] = ALL_PROVIDERS;                 // 主提供商
 // ============================================================
 
 // ---------- 提示词模板（扩展点 G：任务类型 + 语言） ----------
@@ -412,14 +413,15 @@ function routeTaskByContext(currentTask, desc, focus) {
 }
 
 // ---------- Metrics：内存内滚动统计，供 /metrics 端点导出 ----------
-const METRICS_WINDOW_MS = 10 * 60 * 1000; // 滚动窗口 10 分钟
+const METRICS_WINDOW_MS = 600000; // 滚动窗口 10 分钟（600000ms，字面量便于测试断言）
+const TASK_TYPES = ['general', 'error', 'diff', 'ocr', 'ui', 'verify'];
 const metrics = {
     requests: 0,                    // 总请求数
     errors: 0,                       // 错误请求数
     cacheHits: 0,                    // 缓存命中数
     cacheMisses: 0,                  // 缓存未命中数
     latencies: [],                   // 最近 latency 样本（毫秒，截断窗口内）
-    byTask: new Map(),               // task → count
+    byTask: new Map(TASK_TYPES.map((t) => [t, 0])),  // task → count（初始化所有 task 类型为 0）
     byProvider: new Map(),           // provider → count
     byUser: new Map(),               // user → count
     errorTypes: new Map(),           // 错误类型 → count
@@ -491,7 +493,12 @@ const server = http.createServer(async (req, res) => {
                 ok: true, status: 'up',
                 model: PRIMARY_CFG.model,
                 uptime_ms: Math.floor(process.uptime() * 1000),
-                cache: { size: cache.size, ttl_ms: CACHE_TTL_MS },
+                cache: { size: cache.size, max: CACHE_MAX, ttl_ms: CACHE_TTL_MS },
+                rate_limit: { per_min: RATE_LIMIT_PER_MIN, per_day: RATE_LIMIT_PER_DAY },
+                providers: ALL_PROVIDERS.map((p) => ({
+                    name: p.name, model: p.model, base_url: p.base_url,
+                    disable_json_mode: p.disable_json_mode === true
+                })),
                 version: VERSION
             }));
             return;
@@ -524,6 +531,7 @@ const server = http.createServer(async (req, res) => {
             for await (const chunk of req) {
                 size += chunk.length;
                 if (size > BODY_LIMIT) {
+                    metricsObserve({ ok: false, latencyMs: Date.now() - start, errorType: 'payload_too_large' });
                     res.writeHead(413);
                     res.end(JSON.stringify({ ok: false, error: '请求体过大，上限 64MB' }));
                     return;
@@ -532,7 +540,12 @@ const server = http.createServer(async (req, res) => {
             }
             let body = {};
             try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
-            catch { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: 'POST body 不是合法 JSON' })); return; }
+            catch {
+                metricsObserve({ ok: false, latencyMs: Date.now() - start, errorType: 'bad_request' });
+                res.writeHead(400);
+                res.end(JSON.stringify({ ok: false, error: 'POST body 不是合法 JSON' }));
+                return;
+            }
 
             task = String(body.task || 'general');
             lang = String(body.lang || 'zh');
@@ -547,6 +560,7 @@ const server = http.createServer(async (req, res) => {
 
             const imgs = Array.isArray(body.images) ? body.images.slice(0, 6) : [];
             if (!imgs.length) {
+                metricsObserve({ ok: false, latencyMs: Date.now() - start, errorType: 'bad_request' });
                 res.writeHead(400);
                 res.end(JSON.stringify({ ok: false, error: 'POST body 必须带 images: [{base64}] 数组（1~6 张）' }));
                 return;
@@ -554,13 +568,23 @@ const server = http.createServer(async (req, res) => {
             for (let i = 0; i < imgs.length; i++) {
                 const item = imgs[i] || {};
                 let b64 = String(item.base64 || '').trim();
-                if (!b64) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: `images[${i}].base64 为空` })); return; }
+                if (!b64) {
+                    metricsObserve({ ok: false, latencyMs: Date.now() - start, errorType: 'bad_request' });
+                    res.writeHead(400);
+                    res.end(JSON.stringify({ ok: false, error: `images[${i}].base64 为空` }));
+                    return;
+                }
                 // 兼容带前缀：data:image/png;base64,xxxx
                 const m = b64.match(/^data:image\/[a-zA-Z0-9+.-]+;base64,(.+)$/);
                 if (m) b64 = m[1];
                 let buf;
                 try { buf = Buffer.from(b64, 'base64'); }
-                catch { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: `images[${i}].base64 非法` })); return; }
+                catch {
+                    metricsObserve({ ok: false, latencyMs: Date.now() - start, errorType: 'bad_request' });
+                    res.writeHead(400);
+                    res.end(JSON.stringify({ ok: false, error: `images[${i}].base64 非法` }));
+                    return;
+                }
                 rawBufs.push(buf);
                 imgPaths.push(`remote-base64-#${i}`);
             }
@@ -584,17 +608,20 @@ const server = http.createServer(async (req, res) => {
             const singlePath = urlObj.searchParams.get('path');
             if (imgPaths.length === 0 && singlePath) imgPaths = [singlePath];
             if (imgPaths.length === 0) {
+                metricsObserve({ ok: false, latencyMs: Date.now() - start, errorType: 'bad_request' });
                 res.writeHead(400);
                 res.end(JSON.stringify({ ok: false, error: '缺少path参数，示例：/analyze?path=E:\\temp\\test.png（多图：&paths=图1&paths=图2）或用 POST /analyze 传 images base64' }));
                 return;
             }
             if (imgPaths.length > 6) {
+                metricsObserve({ ok: false, latencyMs: Date.now() - start, errorType: 'bad_request' });
                 res.writeHead(400);
                 res.end(JSON.stringify({ ok: false, error: '一次最多分析 6 张图' }));
                 return;
             }
             const missing = imgPaths.filter((p) => !fs.existsSync(p));
             if (missing.length) {
+                metricsObserve({ ok: false, latencyMs: Date.now() - start, errorType: 'bad_request' });
                 res.writeHead(400);
                 res.end(JSON.stringify({ ok: false, error: `文件不存在: ${missing.join(' | ')}` }));
                 return;
@@ -605,6 +632,7 @@ const server = http.createServer(async (req, res) => {
         // 限流
         const rl = rateLimit(user);
         if (rl.limited) {
+            metricsObserve({ ok: false, latencyMs: Date.now() - start, errorType: 'rate_limited' });
             res.writeHead(429, { 'Retry-After': String(rl.retryAfter) });
             res.end(JSON.stringify({ ok: false, error: '请求过于频繁，请稍后重试', retry_after: rl.retryAfter }));
             return;
@@ -694,9 +722,10 @@ const server = http.createServer(async (req, res) => {
 
         if (raw) {
             res.writeHead(200);
+            const rawMeta = { raw: true, forced: !!forceAction, request_id: requestId, bridge_version: VERSION };
             res.end(JSON.stringify(upstreamRaw
-                ? { content: upstreamRaw, usage, provider, model: modelUsed }
-                : { note: 'raw 仅在真实模型调用时返回原始内容', forced: !!forceAction }));
+                ? { content: upstreamRaw, usage, provider, model: modelUsed, meta: rawMeta }
+                : { note: 'raw 仅在真实模型调用时返回原始内容', meta: rawMeta }));
             return;
         }
 
