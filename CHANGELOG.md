@@ -2,6 +2,20 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.6.1] - 2026-08-17
+
+### 修复
+
+- **`locate_code` 搜索后端从 rg/findstr/grep 改为 Node 原生遍历**：原三后端在 Windows 上不可靠
+  - ripgrep（rg）在 Git Bash 里是 bash function / alias，Node 的 `execSync` 走 cmd.exe 时识别不到 → 永远 fallback 到 findstr
+  - findstr 多扩展名写法（`*.js *.ts *.mjs`）行为有 bug，搜不全
+  - 改用 `fs.readdirSync` 递归遍历 + `fs.readFileSync` 读文件 + `String.includes` 匹配，零外部工具依赖，跨平台稳定
+  - 新增 `EXCLUDE_DIRS` 黑名单（node_modules / .git / dist / build 等）避免扫依赖拖慢
+  - 新增 `MAX_FILES_SCAN = 3000` 上限，防大项目扫半天
+- **`locate_code` 命中结果定义优先排序**：搜函数名时，原按文件遍历顺序返回，注释/import 里的字符串引用可能挤掉真正的 `function foo()` 定义
+  - 新增 `isDefinition(match, kwLower)` 判断：命中行包含 `function/const/let/var/class/async/export` + 关键词时认定为定义处
+  - 排序后再截断 `maxHits`，定义处稳定顶到前面，用户/Claude 看前几条就是真正要找的位置
+
 ## [1.6.0] - 2026-08-17
 
 ### 新增

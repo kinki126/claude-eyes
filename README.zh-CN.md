@@ -33,7 +33,7 @@
 - 🗂️ **历史搜索**（v1.6.0）：`GET /history?task=&keyword=&since=&until=&limit=` 端点 + `search_history` MCP 工具，按 task/关键词/时间范围搜索落盘的 `history.jsonl`，替代手动 grep
 - 🔄 **多轮追问上下文继承**（v1.5.0）：bridge 按图片 md5 缓存上一轮分析上下文，同图追问（带 focus/crop_bbox）自动注入前一轮的 task/keywords/regions/analysis 摘要，用户不用重复"就是刚才那张图的 xxx 位置"
 - 📢 **阶段进度通知**（v1.5.0）：`analyze_image` / `locate_code` / `search_history` 在关键阶段推送 `notifications/message`（准备 → 桥接就绪 → 调用模型 → 完成），降低 MCP 客户端的感知延迟
-- 🔍 **代码定位**（v1.5.0）：`locate_code` MCP 工具在项目代码里搜关键词（ripgrep / findstr / grep 回退），返回 `{ file, line, match }` 候选，让 Claude 从截图报错直接跳到源码行
+- 🔍 **代码定位**（v1.5.0，v1.6.1 改 Node 原生）：`locate_code` MCP 工具用 **Node 原生递归遍历**搜项目代码（不依赖 rg/findstr/grep 外部工具，跨平台稳定），返回 `{ file, line, match }` 候选，且**定义优先排序**（function/const/class 声明排前面，不被注释/import 里的字符串引用挤掉）
 - 📦 **默认 JSON 模式**（v1.3.0+）：默认启用 `response_format: json_object`，模型直接吐合法 JSON；Ollama 等不支持的 provider 自动关闭，bridge 仍靠 5 层 fallback 兜底
 - 🔐 **远程就绪**：`POST /analyze` 收 base64 图片（body 上限 64MB）；`server-http.js` 鉴权用 `crypto.timingSafeEqual` 防时序攻击
 
