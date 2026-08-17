@@ -7,9 +7,44 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createAnalyzeImageHandler, createLocateCodeHandler, createSearchHistoryHandler } from './analyze-tool.js';
 
-const server = new McpServer({ name: 'mcp-image-analyzer', version: '1.6.1' });
+// ---- 进程级兜底：防 stdio 断连导致进程崩溃（2026-08 加固）----
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const LOG_DIR = path.join(__dirname, '..', 'logs');
+const LOG_FILE = path.join(LOG_DIR, 'mcp-image-analyzer.log');
+
+function log(msg) {
+    const line = `${new Date().toISOString()} [mcp-image-analyzer] ${msg}\n`;
+    try {
+        fs.mkdirSync(LOG_DIR, { recursive: true });
+        fs.appendFileSync(LOG_FILE, line);
+    } catch { /* 日志失败不阻塞主流程 */ }
+    try { process.stderr.write(line); } catch { /* 忽略 */ }
+}
+
+// 客户端超时/中止会先关管道，此后 SDK 写 stdout 触发 EPIPE——吞掉，避免整进程崩溃
+process.stdout.on('error', (err) => {
+    if (err && err.code === 'EPIPE') log('stdout EPIPE（客户端已断开），忽略');
+    else log('stdout error: ' + (err && (err.stack || err.message) || err));
+});
+process.stderr.on('error', () => { /* 忽略 stderr 管道错误 */ });
+
+process.on('uncaughtException', (err) => {
+    // 只记日志不退出：uncaughtException 通常是单个请求出错（而非全局状态损坏），
+    // 退出 MCP 进程会导致客户端无法再连，后果比继续服务更严重；
+    // 若真出现全局死锁，客户端自己会超时断连，无需手动杀进程。
+    log('uncaughtException: ' + (err && (err.stack || err.message) || err));
+});
+process.on('unhandledRejection', (reason) => {
+    // 多可恢复（如单个 tool 请求失败），只记录不退出
+    log('unhandledRejection: ' + (reason && (reason.stack || reason.message) || reason));
+});
+
+const server = new McpServer({ name: 'mcp-image-analyzer', version: '1.6.2' });
 
 server.tool(
     'analyze_image',
@@ -61,5 +96,11 @@ server.tool(
     createSearchHistoryHandler()
 );
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+try {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    log('MCP stdio 服务已连接');
+} catch (err) {
+    log('MCP connect 失败: ' + (err && (err.stack || err.message) || err));
+    process.exit(1);
+}

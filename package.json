@@ -1,6 +1,6 @@
 {
   "name": "claude-eyes",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Give Claude Code eyes — analyze local screenshots via an MCP tool + vision LLM bridge, with automatic continue/stop control.",
   "keywords": [
     "claude-code",

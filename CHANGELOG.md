@@ -2,6 +2,26 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.6.2] - 2026-08-17
+
+### 新增
+
+- **MCP 进程稳定性加固（根因修复：Vue3 大项目分析时断连）**
+  - `createLocateCodeHandler` 的 `collectFiles` 改为异步 + 每目录让出事件循环（`setImmediate`）：原同步递归遍历大目录（如 Vue3 + node_modules）时独占 CPU 几秒，MCP 进程对客户端的 ping 无响应→判假死→断连；改为异步后每处理一个目录让一次 CPU，保持 stdio 心跳
+  - `locate_code` 读文件也改为异步 + 每文件让出事件循环，并优化成「每文件只读一次同时扫全部关键词」（省 10 倍读盘），避免大项目卡死
+  - `index.js`（MCP stdio 入口）新增进程级兜底：
+    - `process.stdout.on('error')` 吞 EPIPE：客户端超时/中止先关管道后，SDK 写 stdout 会触发 EPIPE，没 handler 会让进程崩
+    - `stderr.on('error')` 忽略：防止 stderr 关管道也牵连崩溃
+    - `uncaughtException` 只记日志不退出：原 `process.exit(1)` 会导致客户端永久断连（因为 hook 无法复活 Claude Code 拉起的 MCP 子进程），单个请求出错≠全局损坏
+    - `unhandledRejection` 只记日志不退出（与原行为一致，单个 tool 失败不该杀进程）
+  - 新增 `logs/mcp-image-analyzer.log`：所有上述异常都落盘，便于事后排查；日志写入失败静默忽略，不阻塞主流程
+- **`session-start-hook.cjs` 冷启动预拉起 bridge**：Claude Code SessionStart 时自动探活 bridge（127.0.0.1:8765），不在就拉起，消除第一次 `analyze_image` 调用卡 5 秒探活的延迟；路径全部无硬编码（`BRIDGE_SCRIPT_PATH` / `CLAUDE_EYES_LOG_DIR` 环境变量覆盖，默认 `__dirname/../` 推导项目根）
+
+### 移除
+
+- 删除 `post-tool-use-hook.cjs`：hook 无法复活 MCP 进程，只能返回 `systemMessage` 提示用户跑 `/mcp`，价值低于维护成本，且原文件路径硬编码 + 未在 settings 注册，属于死代码
+- 删除临时排查脚本 `check_img.py` / `check_prev.py`：一次性调试工具，不属项目功能
+
 ## [1.6.1] - 2026-08-17
 
 ### 修复

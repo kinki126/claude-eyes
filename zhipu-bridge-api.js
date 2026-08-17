@@ -29,7 +29,7 @@ const RATE_LIMIT_PER_MIN = Number(process.env.RATE_LIMIT_PER_MIN || 0); // 0=不
 const RATE_LIMIT_PER_DAY = Number(process.env.RATE_LIMIT_PER_DAY || 0); // 0=不限
 const USAGE_LOG = process.env.USAGE_LOG !== '0';
 const LOG_DIR = process.env.LOG_DIR || path.join(__dirname, 'logs');
-const VERSION = '1.6.1';
+const VERSION = '1.6.2';
 // P2-3: token 成本估算单价（美元 / 1k tokens，可用 env 覆盖）
 // 默认 $0.001/1k tokens，近似智谱 GLM-4V 等主流视觉模型单价量级；如需精确按 provider 区分可在这里扩展
 const PRICE_PER_1K_TOKENS = Number(process.env.PRICE_PER_1K_TOKENS || 0.001);

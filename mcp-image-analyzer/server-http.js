@@ -66,7 +66,7 @@ const SEARCH_HISTORY_SCHEMA = {
 
 /** 每个会话一个独立的 McpServer（Protocol 单 transport 限制） */
 function createMcpServer() {
-    const srv = new McpServer({ name: 'mcp-image-analyzer', version: '1.6.1' });
+    const srv = new McpServer({ name: 'mcp-image-analyzer', version: '1.6.2' });
     srv.tool('analyze_image', TOOL_DESCRIPTION, TOOL_SCHEMA, createAnalyzeImageHandler({ user: 'remote' }));
     srv.tool('locate_code', LOCATE_CODE_DESCRIPTION, LOCATE_CODE_SCHEMA, createLocateCodeHandler());
     srv.tool('search_history', SEARCH_HISTORY_DESCRIPTION, SEARCH_HISTORY_SCHEMA, createSearchHistoryHandler());

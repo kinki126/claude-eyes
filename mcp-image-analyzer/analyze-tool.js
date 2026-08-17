@@ -231,25 +231,32 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', '.claude-eyes', 'logs', 'shots', 'dist', 'build', '.next', 'coverage', '__pycache__', '.venv', 'venv', '.idea']);
 const MAX_FILES_SCAN = 3000; // 单次扫描最多处理的文件数（防大项目拖慢）
 
-/** 递归收集 root 下匹配扩展名的文件（排除依赖/构建目录） */
-function collectFiles(root, exts, limit) {
+const fsp = fs.promises;
+
+/**
+ * 异步收集 root 下匹配扩展名的文件（排除依赖/构建目录）。
+ * 用显式栈迭代遍历（避免深目录树递归爆栈），每处理一个目录让出一次事件循环，
+ * 防止长目录树独占 CPU 导致客户端判挂起断连。
+ */
+async function collectFiles(root, exts, limit) {
     const files = [];
-    const walk = (dir) => {
-        if (files.length >= limit) return;
+    const stack = [root];
+    while (stack.length && files.length < limit) {
+        const dir = stack.pop();
         let entries;
-        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { continue; }
         for (const e of entries) {
-            if (files.length >= limit) return;
+            if (files.length >= limit) break;
             if (e.isDirectory()) {
                 if (EXCLUDE_DIRS.has(e.name)) continue;
-                walk(path.join(dir, e.name));
+                stack.push(path.join(dir, e.name));
             } else if (e.isFile()) {
                 const ext = path.extname(e.name).toLowerCase();
                 if (exts.includes(ext)) files.push(path.join(dir, e.name));
             }
         }
-    };
-    walk(root);
+        await new Promise(r => setImmediate(r));
+    }
     return files;
 }
 
@@ -287,27 +294,37 @@ export function createLocateCodeHandler({ defaultProjectRoot = PROJECT_ROOT } = 
         // 搜索后端：Node 原生遍历 + 字符串匹配（不依赖 rg/findstr/grep 外部工具，跨平台稳定；
         // rg 在 Git Bash 里是 function/alias，在 cmd.exe 的 execSync 下不可用，findstr 多扩展名写法也有坑）
         const searchEngine = 'node-native';
-        const files = collectFiles(root, exts, MAX_FILES_SCAN);
-        const results = [];
-        for (const kw of keywords) {
-            const kwLower = kw.toLowerCase();
-            const hits = [];
-            for (const file of files) {
-                if (hits.length >= 500) break; // 宽松上限，防极端项目内存爆炸
-                let content;
-                try { content = fs.readFileSync(file, 'utf8'); } catch { continue; }
-                const lines = content.split(/\r?\n/);
-                for (let i = 0; i < lines.length; i++) {
-                    if (hits.length >= 500) break;
-                    if (lines[i].toLowerCase().includes(kwLower)) {
-                        hits.push({ file, line: i + 1, match: lines[i].trim().slice(0, 200) });
+        const files = await collectFiles(root, exts, MAX_FILES_SCAN);
+        // 每个文件只读一次、同时扫全部关键词（比逐关键词重读文件省 10 倍读盘）；
+        // 异步 + 每文件让出事件循环，避免大项目卡死 MCP 进程
+        const kwList = keywords.map(kw => kw.toLowerCase());
+        const perKw = kwList.map(() => ({ hits: [] }));
+        const allFull = () => perKw.every(p => p.hits.length >= 500); // 宽松上限，防极端项目内存爆炸
+        for (const file of files) {
+            if (allFull()) break;
+            let content;
+            try { content = await fsp.readFile(file, 'utf8'); } catch { continue; }
+            const lines = content.split(/\r?\n/);
+            for (let i = 0; i < lines.length; i++) {
+                if (allFull()) break;
+                const lower = lines[i].toLowerCase();
+                for (let k = 0; k < kwList.length; k++) {
+                    if (perKw[k].hits.length >= 500) continue;
+                    if (lower.includes(kwList[k])) {
+                        perKw[k].hits.push({ file, line: i + 1, match: lines[i].trim().slice(0, 200) });
                     }
                 }
             }
+            await new Promise(r => setImmediate(r));
+        }
+        const results = [];
+        for (let k = 0; k < kwList.length; k++) {
+            const kwLower = kwList[k];
+            const hits = perKw[k].hits;
             // 定义处优先：声明（function/const/...）排前面，用户找的是定义而非注释/import 里的引用；
             // 排序后再截断 maxHits，避免定义处被前面的字符串引用挤掉
             hits.sort((a, b) => (isDefinition(b.match, kwLower) ? 1 : 0) - (isDefinition(a.match, kwLower) ? 1 : 0));
-            results.push({ keyword: kw, hits_count: hits.length, hits: hits.slice(0, maxHits) });
+            results.push({ keyword: keywords[k], hits_count: hits.length, hits: hits.slice(0, maxHits) });
         }
 
         const totalHits = results.reduce((s, r) => s + r.hits_count, 0);
