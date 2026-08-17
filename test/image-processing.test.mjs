@@ -9,7 +9,7 @@ import sharp from 'sharp';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { chooseFormat, sliceLongImage, ocrPreprocess } = require('../zhipu-bridge-api.js');
+const { chooseFormat, sliceLongImage, ocrPreprocess, autoCropBorder } = require('../zhipu-bridge-api.js');
 
 // 合成 PNG（无 alpha，3 通道）— UI/文字类
 async function makePngNoAlpha(w, h) {
@@ -140,4 +140,57 @@ test('ocrPreprocess: 无效输入返回原 buf', async () => {
     const badBuf = Buffer.from('not-an-image');
     const out = await ocrPreprocess(badBuf);
     assert.equal(out, badBuf, '无效输入原样返回');
+});
+
+// ---------- autoCropBorder（P1-4：自动裁掉纯色边框） ----------
+// 合成带纯色边框的图：内部画一个白色矩形，外圈 N 像素是黑色边框
+async function makeImageWithBorder(innerW, innerH, border) {
+    const w = innerW + border * 2;
+    const h = innerH + border * 2;
+    // 外圈黑色（值 0），内部白色（值 255）的 3 通道图
+    const raw = Buffer.alloc(w * h * 3, 0); // 全 0（黑）
+    for (let y = border; y < h - border; y++) {
+        for (let x = border; x < w - border; x++) {
+            const i = (y * w + x) * 3;
+            raw[i] = 255; raw[i + 1] = 255; raw[i + 2] = 255;
+        }
+    }
+    return sharp(raw, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer();
+}
+
+test('autoCropBorder: 带纯色边框的图应裁掉边框（cropped=true）', async () => {
+    // 80x80 内部 + 20px 黑边 = 120x120，trim 后应回到接近 80x80
+    const buf = await makeImageWithBorder(80, 80, 20);
+    const r = await autoCropBorder(buf);
+    assert.equal(r.cropped, true, '应识别为已裁剪');
+    assert.ok(r.from && r.to, '应返回 from/to 尺寸信息');
+    assert.equal(r.from.width, 120);
+    assert.equal(r.from.height, 120);
+    // trim 后应在 80x80 附近（允许 threshold 容差导致的 ±几像素）
+    assert.ok(r.to.width <= 90 && r.to.width >= 70, `裁后宽度应在 70-90 之间，实际 ${r.to.width}`);
+    assert.ok(r.to.height <= 90 && r.to.height >= 70, `裁后高度应在 70-90 之间，实际 ${r.to.height}`);
+});
+
+test('autoCropBorder: 无边框的图 cropped=false 且 buf 不变', async () => {
+    // 全白图（无纯色边框可裁）—— 实际 sharp.trim 对全色相同图会裁到 1x1，触发回退
+    const buf = await makePngNoAlpha(100, 100); // 全黑图，trim 会过度裁剪 → 回退
+    const r = await autoCropBorder(buf);
+    assert.equal(r.cropped, false, '过度裁剪应回退到 cropped=false');
+    assert.equal(r.buf, buf, '回退时返回原 buf 引用');
+});
+
+test('autoCropBorder: 内部有内容 + 小边框应正常裁剪', async () => {
+    // 30x30 内部 + 5px 黑边 = 40x40，应裁掉小边框
+    const buf = await makeImageWithBorder(30, 30, 5);
+    const r = await autoCropBorder(buf);
+    assert.equal(r.cropped, true, '小边框也应识别');
+    assert.ok(r.to.width < r.from.width, '裁后宽度应小于原宽');
+    assert.ok(r.to.height < r.from.height, '裁后高度应小于原高');
+});
+
+test('autoCropBorder: 无效输入返回 cropped=false 原 buf', async () => {
+    const badBuf = Buffer.from('not-an-image');
+    const r = await autoCropBorder(badBuf);
+    assert.equal(r.cropped, false);
+    assert.equal(r.buf, badBuf, '无效输入原样返回');
 });

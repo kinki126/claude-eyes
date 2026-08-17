@@ -16,7 +16,7 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { createAnalyzeImageHandler, userContext } from './analyze-tool.js';
+import { createAnalyzeImageHandler, createLocateCodeHandler, createSearchHistoryHandler, userContext } from './analyze-tool.js';
 
 const PORT = Number(process.env.MCP_HTTP_PORT || 8831);
 const HOST = process.env.MCP_HTTP_HOST || '127.0.0.1';
@@ -41,10 +41,35 @@ const TOOL_SCHEMA = {
     mode: z.enum(['auto']).optional().default('auto').describe('当前仅支持 auto（模型自动决定继续/停止）')
 };
 
+const LOCATE_CODE_DESCRIPTION =
+    '在项目代码里搜索关键词（优先用 analyze_image 返回的 keywords），返回 文件:行号:匹配行 候选列表。' +
+    '比直接 grep 更结构化，Claude 拿到候选后可用 Read 工具读上下文判断是否是问题代码。' +
+    '注意：远程模式下搜索的是服务器上的代码目录，请确保 project_root 指向服务器上的有效路径。';
+const LOCATE_CODE_SCHEMA = {
+    keywords: z.array(z.string()).min(1).max(10).describe('要搜索的关键词数组（1~10 个），如 ["TypeError","renderX"]。优先用 analyze_image 返回的 keywords'),
+    project_root: z.string().optional().describe('项目根目录（绝对路径），不传则用默认项目根'),
+    max_hits_per_keyword: z.number().optional().describe('每个关键词最多返回多少条命中（默认 5，上限 20）'),
+    file_extensions: z.array(z.string()).optional().describe('要搜索的文件扩展名数组，如 [".js",".ts"]；不传则默认常见代码文件')
+};
+
+const SEARCH_HISTORY_DESCRIPTION =
+    '搜索历史分析记录（按 task / keyword / 时间范围过滤），返回最近的分析记录列表。' +
+    '用户说"找昨天的报错分析""上周那张 TypeError 的图"时用。';
+const SEARCH_HISTORY_SCHEMA = {
+    task: z.enum(['general', 'error', 'diff', 'ocr', 'ui', 'verify']).optional().describe('按任务类型过滤'),
+    keyword: z.string().optional().describe('关键词（在 analysis 文本和 keywords 数组里模糊匹配，大小写不敏感）'),
+    since: z.string().optional().describe('起始时间（ISO 字符串或 yyyy-mm-dd）'),
+    until: z.string().optional().describe('结束时间（ISO 字符串或 yyyy-mm-dd）'),
+    limit: z.number().optional().describe('返回条数上限（默认 20，上限 100）'),
+    user: z.string().optional().describe('按用户过滤（管理员场景）')
+};
+
 /** 每个会话一个独立的 McpServer（Protocol 单 transport 限制） */
 function createMcpServer() {
-    const srv = new McpServer({ name: 'mcp-image-analyzer', version: '1.4.1' });
+    const srv = new McpServer({ name: 'mcp-image-analyzer', version: '1.6.0' });
     srv.tool('analyze_image', TOOL_DESCRIPTION, TOOL_SCHEMA, createAnalyzeImageHandler({ user: 'remote' }));
+    srv.tool('locate_code', LOCATE_CODE_DESCRIPTION, LOCATE_CODE_SCHEMA, createLocateCodeHandler());
+    srv.tool('search_history', SEARCH_HISTORY_DESCRIPTION, SEARCH_HISTORY_SCHEMA, createSearchHistoryHandler());
     return srv;
 }
 

@@ -74,6 +74,21 @@ task = "diff"  # 或不传，自动路由命中"对比"
 
 打标签让模型清楚每张图的角色，diff/对比场景准确率显著提升。
 
+### 1.2.1 diff 结构化输出（v1.6.0+）
+
+`task=diff` 返回的 `analysis` 字段除了常规 `text` 外，还会带一个 `diffs` 数组，逐项列出各图之间的差异：
+
+```json
+"diffs": [
+  { "item": "提交按钮颜色", "from": "灰色", "to": "蓝色", "change_type": "modify", "image_index": 1, "bbox": { "x": 0.3, "y": 0.6, "w": 0.15, "h": 0.08 } },
+  { "item": "标题文案", "from": "", "to": "新版", "change_type": "add", "image_index": 1, "bbox": { "x": 0.1, "y": 0.05, "w": 0.3, "h": 0.05 } }
+]
+```
+
+- `change_type`: `add`（图1无图2新增）/ `remove`（图1有图2删）/ `modify`（两图都有但变化）
+- `bbox` 是差异区域的归一化坐标，用户说"细看第 2 处改动"时可作 `crop_bbox` 传回精准放大
+- 超过 3 个变化点时，**Claude 应用 markdown 表格呈现**：`| # | 差异项 | 图1 | 图2 | 类型 |`，让用户一眼看清
+
 ### 1.3 分析历史（自动落盘，可回看）
 
 每次成功的分析（非 `force_action`）都会自动落盘到 `<项目根>\.claude-eyes\history.jsonl`，每行一条 JSON：
@@ -82,7 +97,10 @@ task = "diff"  # 或不传，自动路由命中"对比"
 {"ts":"2026-08-17T10:23:00Z","request_id":"r-...","user":"local","md5":"abc...","image_count":1,"task":"error","action":"stop","analysis":"...","keywords":["TypeError","renderX"],"regions":[...],"cache":"miss","latency_ms":1234}
 ```
 
-**回看历史**：用户说"昨天那张 TypeError 的图重新看一下" → Claude 可以 `Get-Content .claude-eyes\history.jsonl | Select-String "TypeError"` 找到 md5/路径线索，再用 `analyze_image` 重新跑（1 小时内 cache=hit 秒回）。
+**回看历史**（v1.6.0+ 起推荐用 `search_history` 工具）：
+- 用户说"昨天那张 TypeError 的图重新看一下" → 调 `search_history(keyword="TypeError", since="2026-08-16")` 返回结构化结果
+- 支持过滤：`task`（任务类型）、`keyword`（analysis 文本 + keywords 数组模糊匹配）、`since/until`（时间范围）、`limit`（默认 20 上限 100）
+- 旧方式仍可用：`Get-Content .claude-eyes\history.jsonl | Select-String "TypeError"` 找到 md5/路径线索，再用 `analyze_image` 重新跑（1 小时内 cache=hit 秒回）。
 
 ## 1.5 多轮追问（第一轮拿不准就带 `focus` 再问）
 
@@ -98,6 +116,8 @@ task = "diff"  # 或不传，自动路由命中"对比"
 - `focus: "浏览器地址栏与状态栏，确认是否加载失败"`
 
 视觉模型会把 `focus` 当最高优先级、定向细看并围绕它作答。追问 1–2 轮通常足够，不要无限循环。
+
+> **P0-1 上下文自动继承**（v1.5.0+）：bridge 会自动把上一轮的 `{ task, keywords, regions, analysis 摘要 }` 注入到本轮 prompt 里。**你不需要在 `focus` 里重复交代「就是刚才那张图的 xxx 位置」**——bridge 已经告诉模型了。响应里 `meta.context_inherited: true` 表示本轮注入了上一轮上下文。
 
 ## 1.6 精准放大追问（带 `crop_bbox`，比单 `focus` 看得更清）
 
@@ -137,7 +157,13 @@ analyze_image(path=同一张, focus="红框里的报错文字一字不差转录"
 返回的 `regions` 是标注区域/关键元素的**归一化坐标**（每条 `bbox` 的 `x/y/w/h` 都在 0.0~1.0，相对整张图）。若截图对应某个已知窗口/组件，可用它把"图里的位置"映射到"代码里的坐标/布局"（例如前端组件在页面中的相对位置、截图裁剪用的 ROI 比例）；结合 `keywords` 一起定位，比单靠文字更准。
 
 返回的 `keywords` 是可用于代码检索的关键词（报错函数名 / 错误码 / 文件名 / 接口路径等）；`annotated_text` 是用户附加标注区域的逐字转录，**优先用它**。当它们非空、且当前是代码项目时：
-- 在当前项目里用 grep/搜索这些关键词（优先函数名、文件名、错误码、接口路径，优先 `annotated_text` 里的内容）。
+
+- **优先用 `locate_code` 工具**搜索（比直接 grep 更结构化，返回 `{ file, line, match }` 候选列表）：
+  ```
+  locate_code(keywords=["TypeError", "renderX"], project_root="E:\\temp", max_hits_per_keyword=5)
+  ```
+- 拿到候选后，用 `Read` 工具读 `文件:行号` 附近 ±5 行上下文，判断是否是真正的**问题代码**（而非注释或无关引用）。
+- **P1-1 二次确认**：若候选较多，把可疑代码片段（3-5 行）作为 `description` 传给 `analyze_image` + `task=verify`，让视觉模型确认「图中报错是否对应这段代码」。
 - 报告命中的 **`文件:行号`** 与相关代码片段，帮助用户定位到问题代码。
 - 若搜索无命中，照常给结论即可，**不要强行猜测**。
 
@@ -146,7 +172,9 @@ analyze_image(path=同一张, focus="红框里的报错文字一字不差转录"
 当你基于第一轮结果**推理出某个具体结论**（例如"报错是 TypeError""这个按钮是禁用状态""页面加载失败是因为 404"），而这个结论对后续定位很关键时，用 `task=verify` + `description=你的断言` 让视觉模型回到原图**确认/证伪**，而不是盲信第一次转述：
 
 - 调 `analyze_image`，`path/paths` 同一张图，`task: "verify"`，`description: "断言内容"`。
+- **v1.6.0+ 支持显式断言语法**：`description: "assert=按钮是否为红色"` 或 `description: "assert=错误类型是 TypeError"`。bridge 会从 description 里提取 `assert=` 后面的部分作为断言。
 - 返回看 `verdict`：`true`=成立 / `false`=被反驳 / `uncertain`=图上看不出来；`evidence` 是图中证据。
+- **结构化结果**（v1.6.0+）：返回 `verify.passed`（boolean 或 null）+ `verify.reason`（一句话理由），便于自动化场景（如截图回归测试）直接判断过没过；`verdict=uncertain` 时 `passed=null`。
 - `verdict=uncertain` 时，再回到 `task=general` + `focus` 让视觉模型细看相关区域。
 
 ## 4. 读取返回的 `control.action`

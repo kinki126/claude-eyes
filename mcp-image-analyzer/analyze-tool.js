@@ -4,8 +4,9 @@
 //   - createAnalyzeImageHandler(): 工具处理函数，桥接薄客户端
 // ============================================================
 
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
@@ -33,9 +34,26 @@ const SUPPORTED_TOOL_PARAMS = [
 // 远程 HTTP 入口通过 userContext.run({user}) 注入每个请求的 X-User
 export const userContext = new AsyncLocalStorage();
 
-async function isBridgeUp(timeoutMs = 500) {
+// P0-2: 通过 MCP notification 向客户端推送进度信息（不阻塞主流程，失败静默忽略）
+// extra 是 MCP tool handler 的第二参数，含 sendNotification 方法
+function makeProgressSender(extra) {
+    return (message, level = 'info') => {
+        try {
+            if (extra?.sendNotification) {
+                extra.sendNotification({
+                    method: 'notifications/message',
+                    params: { level, data: message, logger: 'analyze-image' }
+                });
+            }
+        } catch {
+            /* 静默：notification 失败不影响主流程 */
+        }
+    };
+}
+
+async function isBridgeUp(baseUrl = BRIDGE_BASE_URL, timeoutMs = 500) {
     try {
-        await axios.get(`${BRIDGE_BASE_URL}/health`, { timeout: timeoutMs });
+        await axios.get(`${baseUrl}/health`, { timeout: timeoutMs });
         return true;
     } catch {
         return false;
@@ -43,8 +61,8 @@ async function isBridgeUp(timeoutMs = 500) {
 }
 
 /** 确保桥接在线：不通且允许自动拉起时 spawn，然后轮询 /health（最多 3 次拉起 × 2.5s） */
-export async function ensureBridge() {
-    if (await isBridgeUp()) return true;
+export async function ensureBridge(baseUrl = BRIDGE_BASE_URL) {
+    if (await isBridgeUp(baseUrl)) return true;
     if (!AUTO_SPAWN_BRIDGE) return false;
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -61,7 +79,7 @@ export async function ensureBridge() {
         // 每次拉起后轮询最多 ~2.5s（桥接冷启动 + 端口 TIME_WAIT 竞争）
         for (let i = 0; i < 5; i++) {
             await new Promise(r => setTimeout(r, 500));
-            if (await isBridgeUp(400)) return true;
+            if (await isBridgeUp(baseUrl, 400)) return true;
         }
     }
     return false;
@@ -74,7 +92,8 @@ export async function ensureBridge() {
  * @param {string} [opts.user]          兜底用户标识（远程由 userContext 覆盖）
  */
 export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, user = MCP_USER } = {}) {
-    return async ({ path, paths, description, task, lang, focus, crop_bbox, image_base64, images_base64 }) => {
+    return async ({ path, paths, description, task, lang, focus, crop_bbox, image_base64, images_base64 }, extra) => {
+        const sendProgress = makeProgressSender(extra);
         // 图片来源：本地路径 或 直接 base64（远程模式下 bridge 拿不到客户端本地文件时用）
         const hasBase64 = Boolean(image_base64) || (Array.isArray(images_base64) && images_base64.length);
         const imgList = (Array.isArray(paths) && paths.length) ? paths.slice(0, 6) : (path ? [path] : []);
@@ -82,12 +101,16 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
             return { isError: true, content: [{ type: 'text', text: '缺少参数：请传 path/paths（本地路径） 或 image_base64/images_base64（base64 内容）。' }] };
         }
 
-        if (!(await ensureBridge())) {
+        const imgCount = imgList.length || (Array.isArray(images_base64) ? images_base64.length : (image_base64 ? 1 : 0));
+        sendProgress(`准备分析 ${imgCount} 张图（task=${task || 'general'}）...`);
+        if (!(await ensureBridge(bridgeBaseUrl))) {
             return {
                 isError: true,
                 content: [{ type: 'text', text: `图像分析桥接服务未启动，且自动拉起失败。请手动运行: node ${BRIDGE_SCRIPT_PATH}（确认 8765 端口监听）。` }]
             };
         }
+
+        sendProgress('桥接服务已就绪，正在' + (hasBase64 ? '上传' : '读取') + '图片...');
 
         try {
             const b64List = hasBase64
@@ -107,6 +130,7 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
                 };
                 const activeUser = userContext.getStore()?.user || user;
                 if (activeUser) reqBody.user = activeUser;
+                sendProgress('正在调用视觉模型分析（可能需要 3-15 秒）...');
                 const resp = await axios.post(`${bridgeBaseUrl}/analyze`, reqBody, {
                     timeout: 65000,
                     headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId }
@@ -155,6 +179,7 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
             const activeUser = userContext.getStore()?.user || user;
             if (activeUser) qs.set('user', activeUser);
 
+            sendProgress('正在调用视觉模型分析（可能需要 3-15 秒）...');
             const resp = await axios.get(`${bridgeBaseUrl}/analyze?${qs.toString()}`, {
                 timeout: 65000,
                 headers: { 'X-Request-Id': requestId }
@@ -185,12 +210,139 @@ export function createAnalyzeImageHandler({ bridgeBaseUrl = BRIDGE_BASE_URL, use
                     request_id: body.meta.request_id || requestId
                 }
             };
+            sendProgress('分析完成，正在返回结果...');
             return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };
         } catch (err) {
             const hint = err.code === 'ECONNREFUSED'
                 ? `图像分析桥接服务未启动。请先运行: node ${BRIDGE_SCRIPT_PATH}（确认 8765 端口监听）。`
                 : '';
+            sendProgress('分析失败：' + err.message, 'error');
             return { isError: true, content: [{ type: 'text', text: `${hint} 详细: ${err.message}` }] };
         }
     };
 }
+
+// P1-1: locate_code 工具 —— 用 ripgrep/findstr/grep 搜索 keywords，返回结构化候选
+// 在 MCP 工具层实现（而非 bridge 端），因为它需要访问客户端本地项目代码
+// 只返回 { file, line, match } 三元组；上下文行交给 Claude 用 Read 工具读，保持工具单一职责
+
+/**
+ * 创建 locate_code 处理函数。
+ * @param {object} opts
+ * @param {string} [opts.defaultProjectRoot] 默认项目根（兜底，优先用参数传入的）
+ */
+export function createLocateCodeHandler({ defaultProjectRoot = PROJECT_ROOT } = {}) {
+    return async ({ keywords, project_root, max_hits_per_keyword, file_extensions }, extra) => {
+        const sendProgress = (msg, level = 'info') => {
+            try { extra?.sendNotification?.({ method: 'notifications/message', params: { level, data: msg, logger: 'locate-code' } }); } catch {}
+        };
+
+        if (!Array.isArray(keywords) || keywords.length === 0) {
+            return { isError: true, content: [{ type: 'text', text: '缺少参数：keywords（字符串数组，1~10 个）。' }] };
+        }
+        if (keywords.length > 10) {
+            return { isError: true, content: [{ type: 'text', text: 'keywords 最多 10 个。' }] };
+        }
+        const root = project_root || defaultProjectRoot;
+        const maxHits = Math.min(max_hits_per_keyword || 5, 20);
+        const exts = Array.isArray(file_extensions) && file_extensions.length
+            ? file_extensions
+            : ['.js', '.mjs', '.ts', '.jsx', '.tsx', '.py', '.java', '.go', '.rs', '.c', '.cpp', '.h', '.json', '.yaml', '.yml', '.vue', '.svelte'];
+
+        sendProgress(`正在搜索 ${keywords.length} 个关键词（项目根：${root}）...`);
+
+        // 选择搜索后端：ripgrep（rg）优先，没有则 Windows 用 findstr，其他用 grep -r
+        const hasRg = (() => {
+            try { execSync('rg --version', { stdio: 'ignore', shell: true }); return true; } catch { return false; }
+        })();
+        const isWin = os.platform() === 'win32';
+        const searchEngine = hasRg ? 'ripgrep' : (isWin ? 'findstr' : 'grep');
+
+        const results = [];
+        for (const kw of keywords) {
+            const safeKw = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            let hits = [];
+            try {
+                let out;
+                if (hasRg) {
+                    const extGlob = exts.map(e => `-g "*${e}"`).join(' ');
+                    const cmd = `rg -n --no-heading --max-count ${maxHits} ${extGlob} "${safeKw}" "${root}"`;
+                    out = execSync(cmd, { encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024 * 4, shell: true });
+                } else if (isWin) {
+                    const extPatterns = exts.map(e => `*${e}`).join(' ');
+                    const cmd = `findstr /n /s /i "${kw}" "${root}\\${extPatterns}"`;
+                    out = execSync(cmd, { encoding: 'utf8', timeout: 20000, maxBuffer: 1024 * 1024 * 4, shell: true });
+                } else {
+                    const extFind = exts.map(e => `-name "*${e}"`).join(' -o ');
+                    const cmd = `find "${root}" -type f \\( ${extFind} \\) -exec grep -n -m ${maxHits} "${safeKw}" {} +`;
+                    out = execSync(cmd, { encoding: 'utf8', timeout: 20000, maxBuffer: 1024 * 1024 * 4, shell: true });
+                }
+                // 统一解析输出：文件:行号:匹配内容
+                const lines = out.split(/\r?\n/).filter(Boolean).slice(0, maxHits);
+                hits = lines.map(line => {
+                    const m = line.match(/^(.+?):(\d+):(.*)$/);
+                    return m ? { file: m[1], line: parseInt(m[2], 10), match: m[3] } : null;
+                }).filter(Boolean);
+            } catch (err) {
+                // 搜索失败（如没命中 exit code 非 0）→ 空数组
+                hits = [];
+            }
+            results.push({ keyword: kw, hits_count: hits.length, hits });
+        }
+
+        const totalHits = results.reduce((s, r) => s + r.hits_count, 0);
+        sendProgress(`搜索完成：${totalHits} 个候选命中`);
+
+        const summary = {
+            project_root: root,
+            search_engine: searchEngine,
+            total_hits: totalHits,
+            keywords_searched: keywords.length,
+            results
+        };
+        return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
+    };
+}
+
+/**
+ * 创建 search_history 处理函数（P2-4）：通过 bridge 的 /history 端点搜索历史分析记录
+ * @param {object} opts
+ * @param {string} [opts.bridgeBaseUrl] 桥接地址
+ */
+export function createSearchHistoryHandler({ bridgeBaseUrl = BRIDGE_BASE_URL } = {}) {
+    return async ({ task, keyword, since, until, limit, user }, extra) => {
+        const sendProgress = (msg, level = 'info') => {
+            try { extra?.sendNotification?.({ method: 'notifications/message', params: { level, data: msg, logger: 'search-history' } }); } catch {}
+        };
+
+        if (!(await ensureBridge(bridgeBaseUrl))) {
+            return { isError: true, content: [{ type: 'text', text: `图像分析桥接服务未启动，且自动拉起失败。请手动运行: node ${BRIDGE_SCRIPT_PATH}（确认 8765 端口监听）。` }] };
+        }
+
+        sendProgress('正在搜索历史记录...');
+        try {
+            const qs = new URLSearchParams();
+            if (task) qs.set('task', task);
+            if (keyword) qs.set('keyword', keyword);
+            if (since) qs.set('since', since);
+            if (until) qs.set('until', until);
+            if (limit) qs.set('limit', String(limit));
+            if (user) qs.set('user', user);
+            const requestId = `mcp-hist-${randomUUID()}`;
+            const resp = await axios.get(`${bridgeBaseUrl}/history?${qs.toString()}`, {
+                timeout: 10000,
+                headers: { 'X-Request-Id': requestId }
+            });
+            const body = resp.data;
+            if (!body || body.ok === false) {
+                throw new Error(body?.error || `桥接返回异常: HTTP ${resp.status}`);
+            }
+            sendProgress(`搜索完成：共 ${body.total} 条，返回 ${body.returned} 条`);
+            return { content: [{ type: 'text', text: JSON.stringify(body, null, 2) }] };
+        } catch (err) {
+            sendProgress('搜索失败：' + err.message, 'error');
+            return { isError: true, content: [{ type: 'text', text: `搜索历史失败：${err.message}` }] };
+        }
+    };
+}
+

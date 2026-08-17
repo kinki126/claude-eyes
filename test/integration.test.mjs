@@ -28,6 +28,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const BRIDGE_SCRIPT = path.join(PROJECT_ROOT, 'zhipu-bridge-api.js');
 const PORT = 18800;
+const PACKAGE_JSON = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
 
 function startBridge(env = {}) {
     return new Promise((resolve, reject) => {
@@ -90,7 +91,7 @@ test('整合: /health 端到端字段完整', async () => {
         assert.ok(r.body.cache, 'cache 字段');
         assert.ok(typeof r.body.cache.size === 'number', 'cache.size');
         assert.ok(typeof r.body.cache.ttl_ms === 'number', 'cache.ttl_ms');
-        assert.equal(r.body.version, '1.4.0', 'version 应为 1.4.0');
+        assert.equal(r.body.version, PACKAGE_JSON.version, 'version 应等于 package.json');
     } finally { killTree(child); }
 });
 
@@ -128,7 +129,7 @@ test('整合: GET /analyze force_action 全链路响应字段齐全', async () =
         assert.equal(r.body.meta.cache, 'miss');
         assert.equal(r.body.meta.image_count, 1);
         assert.ok(typeof r.body.meta.latency_ms === 'number');
-        assert.equal(r.body.meta.bridge_version, '1.4.0');
+        assert.equal(r.body.meta.bridge_version, PACKAGE_JSON.version);
         assert.match(r.body.meta.request_id, /^r-/, 'request_id 应自动生成 r- 前缀');
         assert.equal(r.headers['x-request-id'], r.body.meta.request_id, '响应头与 body 一致');
     } finally {
@@ -295,6 +296,159 @@ test('整合: 同一张图 + 同样参数第二次 → cache hit（不传 force_
         // 第一次明确不缓存（force_action 路径），所以 meta.cache 为 'miss'（语义：本次未命中，也不写入）
         assert.equal(r1.body.meta.cache, 'miss', 'force_action 路径下 meta.cache 标 miss');
         // cache hit 路径需要真实模型调用，集成测试不做（单元测试 cache-lru.test.mjs 已覆盖 LRU 命中）
+    } finally {
+        try { fs.rmSync(dummy, { force: true }); } catch {}
+        killTree(child);
+    }
+});
+
+// ---------- P0-3 / P1-4 / P2-3 新增字段端到端验证 ----------
+
+test('整合: P0-3 错误响应带 hint 字段（缺 path → 400 + hint）', async () => {
+    const child = await startBridge();
+    try {
+        const r = await reqJson('GET', '/analyze');
+        assert.equal(r.status, 400);
+        assert.ok(r.body.hint, '错误响应应带 hint 字段');
+        assert.match(r.body.hint, /建议[:：]/, 'hint 应以「建议：」开头');
+        assert.match(r.body.hint, /路径|截图|POST/i, '缺 path 的 hint 应提到路径/截图/POST');
+    } finally { killTree(child); }
+});
+
+test('整合: P0-3 错误响应带 hint 字段（不存在文件 → 400 + hint）', async () => {
+    const child = await startBridge();
+    try {
+        const fakePath = 'E:\\nonexistent\\.ci-int-missing.png';
+        const r = await reqJson('GET', `/analyze?path=${encodeURIComponent(fakePath)}`);
+        assert.equal(r.status, 400);
+        assert.ok(r.body.hint, '文件不存在响应应带 hint');
+        assert.match(r.body.hint, /反斜杠|路径|POST/i, '文件不存在 hint 应提到路径格式或 POST');
+    } finally { killTree(child); }
+});
+
+test('整合: P0-3 未知路由 → 404 + hint', async () => {
+    const child = await startBridge();
+    try {
+        const r = await reqJson('GET', '/totally-unknown');
+        assert.equal(r.status, 404);
+        assert.ok(r.body.hint, '404 应带 hint');
+    } finally { killTree(child); }
+});
+
+test('整合: P0-3 POST body 非法 JSON → 400 + hint', async () => {
+    const child = await startBridge();
+    try {
+        // 直接传非 JSON 字符串触发解析失败
+        const r = await new Promise((resolve, reject) => {
+            const data = 'not-a-json-string';
+            const req = http.request({
+                host: '127.0.0.1', port: PORT, method: 'POST', path: '/analyze',
+                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }
+            }, (res) => {
+                const chunks = [];
+                res.on('data', (c) => chunks.push(c));
+                res.on('end', () => {
+                    try { resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }); }
+                    catch { resolve({ status: res.statusCode, body: { error: 'unparseable' } }); }
+                });
+            });
+            req.on('error', reject);
+            req.write(data);
+            req.end();
+        });
+        assert.equal(r.status, 400);
+        assert.ok(r.body.hint, '非法 JSON 应带 hint');
+        assert.match(r.body.hint, /JSON/i, '非法 JSON hint 应提到 JSON');
+    } finally { killTree(child); }
+});
+
+test('整合: P2-3 成功响应带 cost_info 字段', async () => {
+    const child = await startBridge();
+    const dummy = path.join(PROJECT_ROOT, 'shots', '.ci-int-cost.png');
+    fs.writeFileSync(dummy, await makePng(80, 80));
+    try {
+        const r = await reqJson('GET', `/analyze?path=${encodeURIComponent(dummy)}&force_action=continue`);
+        assert.equal(r.status, 200);
+        assert.ok(r.body.meta.cost_info, 'meta 应有 cost_info 字段');
+        const ci = r.body.meta.cost_info;
+        assert.equal(typeof ci.input_tokens, 'number', 'input_tokens 应是 number');
+        assert.equal(typeof ci.output_tokens, 'number', 'output_tokens 应是 number');
+        assert.equal(typeof ci.total_tokens, 'number', 'total_tokens 应是 number');
+        assert.equal(typeof ci.estimated_cost_usd, 'number', 'estimated_cost_usd 应是 number');
+        assert.equal(typeof ci.cache_saved_tokens, 'number', 'cache_saved_tokens 应是 number');
+        assert.equal(typeof ci.cache_saved_usd, 'number', 'cache_saved_usd 应是 number');
+        assert.equal(typeof ci.price_per_1k_tokens, 'number', 'price_per_1k_tokens 应是 number');
+        // force_action 路径下无真实模型调用，usage 为 null → 全为 0
+        assert.equal(ci.input_tokens, 0, 'force_action 路径下 input_tokens=0');
+        assert.equal(ci.cache_saved_tokens, 0, 'cache miss 时 cache_saved_tokens=0');
+    } finally {
+        try { fs.rmSync(dummy, { force: true }); } catch {}
+        killTree(child);
+    }
+});
+
+test('整合: P1-4 成功响应带 auto_cropped 字段（bool 类型）', async () => {
+    const child = await startBridge();
+    const dummy = path.join(PROJECT_ROOT, 'shots', '.ci-int-autocrop.png');
+    fs.writeFileSync(dummy, await makePng(80, 80));
+    try {
+        const r = await reqJson('GET', `/analyze?path=${encodeURIComponent(dummy)}&force_action=continue`);
+        assert.equal(r.status, 200);
+        assert.equal(typeof r.body.meta.auto_cropped, 'boolean', 'auto_cropped 应是 boolean');
+        // auto_crop 字段：cropped=true 时返回 {from,to}，false 时 undefined
+        if (r.body.meta.auto_cropped) {
+            assert.ok(r.body.meta.auto_crop, 'auto_cropped=true 时 auto_crop 应有值');
+            assert.ok(r.body.meta.auto_crop.from, 'auto_crop.from 应有值');
+            assert.ok(r.body.meta.auto_crop.to, 'auto_crop.to 应有值');
+        }
+    } finally {
+        try { fs.rmSync(dummy, { force: true }); } catch {}
+        killTree(child);
+    }
+});
+
+test('整合: P1-4 带纯色边框的图应触发 auto_cropped=true', async () => {
+    const child = await startBridge();
+    // 合成 80x80 白色内部 + 20px 黑色边框的图（120x120）
+    const inner = await sharp({ create: { width: 80, height: 80, channels: 3, background: { r: 255, g: 255, b: 255 } } }).png().toBuffer();
+    const bordered = await sharp(inner).extend({
+        top: 20, bottom: 20, left: 20, right: 20,
+        background: { r: 0, g: 0, b: 0 }
+    }).png().toBuffer();
+    const dummy = path.join(PROJECT_ROOT, 'shots', '.ci-int-autocrop-border.png');
+    fs.writeFileSync(dummy, bordered);
+    try {
+        const r = await reqJson('GET', `/analyze?path=${encodeURIComponent(dummy)}&force_action=continue`);
+        assert.equal(r.status, 200);
+        assert.equal(r.body.meta.auto_cropped, true, '带纯色边框的图应被自动裁掉 → auto_cropped=true');
+        assert.ok(r.body.meta.auto_crop, 'auto_crop 字段应有值');
+        assert.equal(r.body.meta.auto_crop.from.width, 120, '原宽 120');
+        assert.equal(r.body.meta.auto_crop.from.height, 120, '原高 120');
+        // 裁后应在 80x80 附近（允许 threshold 容差 ±10px）
+        assert.ok(r.body.meta.auto_crop.to.width <= 90 && r.body.meta.auto_crop.to.width >= 70,
+            `裁后宽度应在 70-90 之间，实际 ${r.body.meta.auto_crop.to.width}`);
+    } finally {
+        try { fs.rmSync(dummy, { force: true }); } catch {}
+        killTree(child);
+    }
+});
+
+// ---------- P0-1: context_inherited 字段端到端 ----------
+
+test('整合: P0-1 force_action 路径下 context_inherited=false（不写入 imgContextCache）', async () => {
+    const child = await startBridge();
+    const dummy = path.join(PROJECT_ROOT, 'shots', '.ci-int-ctx-fa.png');
+    fs.writeFileSync(dummy, await makePng(80, 80));
+    try {
+        // force_action=continue 路径下不写入 imgContextCache → 第二轮即使有 focus 也不会继承
+        const r1 = await reqJson('GET', `/analyze?path=${encodeURIComponent(dummy)}&force_action=continue`);
+        assert.equal(r1.status, 200);
+        assert.equal(r1.body.meta.context_inherited, false, 'force_action 路径不应注入上下文');
+
+        // 第二轮带 focus 也不应有上下文（因为第一轮没写入）
+        const r2 = await reqJson('GET', `/analyze?path=${encodeURIComponent(dummy)}&force_action=continue&focus=${encodeURIComponent('看左上角')}`);
+        assert.equal(r2.status, 200);
+        assert.equal(r2.body.meta.context_inherited, false, 'force_action 路径不写入 cache → 第二轮也无继承');
     } finally {
         try { fs.rmSync(dummy, { force: true }); } catch {}
         killTree(child);

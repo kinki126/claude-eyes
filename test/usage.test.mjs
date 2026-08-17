@@ -23,6 +23,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const BRIDGE_SCRIPT = path.join(PROJECT_ROOT, 'zhipu-bridge-api.js');
 const PORT = 18810;
+const PACKAGE_JSON = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
 
 // ---------- bridge 启动/请求工具 ----------
 
@@ -615,7 +616,7 @@ test('用户场景 G1: /health 展示完整配置信息（用户体检）', asyn
         assert.equal(r.body.ok, true);
         assert.equal(r.body.status, 'up');
         assert.ok(r.body.model, '应展示当前模型');
-        assert.equal(r.body.version, '1.4.0');
+        assert.equal(r.body.version, PACKAGE_JSON.version);
         assert.ok(r.body.cache.max > 0, '应展示 cache.max');
         assert.ok(r.body.rate_limit, '应展示 rate_limit 配置');
         assert.ok(Array.isArray(r.body.providers), '应展示 providers 链');

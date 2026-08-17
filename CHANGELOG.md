@@ -2,6 +2,106 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.6.0] - 2026-08-17
+
+### 新增
+
+- **P1-3 `task=diff` 结构化 `diffs[]` 数组**：多图对比时除了常规 `text` 外，模型再返回一个 `diffs` 数组，逐项列出各图差异
+  - 字段：`item`（差异项名）/ `from`（图1内容）/ `to`（图2内容）/ `change_type`（`add`/`remove`/`modify`，模型乱填时归一化为 `modify`）/ `image_index`（差异所在图序号）/ `bbox`（差异区域归一化坐标，复用 `parseRegions` 尺度自适应逻辑，0~1000 / 0~100 / 0~1 三档自动归一）
+  - `parseDiffs(raw)` 函数：最多返回 20 条，过滤掉空对象
+  - `buildPrompt` 为 `task=diff` 加专属输出格式指令，要求模型直接输出 JSON 数组
+  - `extractAnalysis` 解析 `diffs` 字段并加入响应；超过 3 个差异时 SKILL.md 引导 Claude 用 markdown 表格呈现
+- **P1-5 `task=verify` 显式断言 + `verify.passed`**：支持 `description: "assert=按钮是否为红色"` 语法，bridge 从中提取断言内容；返回结构化 `verify: { passed: true|false|null, reason }`
+  - `parseVerifyObject(raw, verdict)` 函数：与 `verdict` 字段语义对齐——`verdict=uncertain` 时强制 `passed=null`（即使模型输出 `passed=true` 也覆盖），避免「看不清但判过」的矛盾
+  - `passed` 接受 `true/false/null` + 字符串形式 `"true"/"false"/"null"/"uncertain"`，非布尔值时从 `verdict` 推导
+  - 向后兼容：模型未输出 `verify` 对象时，从 `verdict` 推导（`true→passed=true`、`false→passed=false`、其他→null）
+  - `buildPrompt` 为 `task=verify` 加专属指令要求输出 `verify` 对象
+  - SKILL.md 第 3.5 节更新：推荐用 `assert=` 语法、`verify.passed` 字段，便于截图回归测试直接判过没过
+- **P2-4 `/history` 端点 + `search_history` MCP 工具**：把每次成功分析落盘的 `history.jsonl` 暴露成可查询接口
+  - bridge 新增 `GET /history?task=&keyword=&since=&until=&limit=&user=` 端点，返回 `{ ok, total, returned, query, results }`
+  - `historySearch({ task, keyword, since, until, limit, user })` 函数：keyword 在 `analysis` 文本 + `keywords` 数组里模糊匹配（大小写不敏感），结果按 `ts` 倒序，limit 默认 20 上限 100
+  - MCP 新增 `search_history` 工具，注册到 `index.js`（stdio）和 `server-http.js`（HTTP）两个入口
+  - 进度通知 2 阶段：正在搜索 → 搜索完成
+  - SKILL.md 第 1.3 节更新：推荐用 `search_history` 工具替代手动 grep 历史
+
+### 修复
+
+- **`ensureBridge` 不接受自定义 baseUrl**：`createSearchHistoryHandler({ bridgeBaseUrl })` 和 `createAnalyzeImageHandler({ bridgeBaseUrl })` 接受的自定义 URL 没传给 `ensureBridge`，导致测试在自定义端口启动 bridge 后 handler 仍去探测默认 8765 → 拉起失败 → `isError=true`
+  - `isBridgeUp(baseUrl, timeoutMs)` 和 `ensureBridge(baseUrl)` 加默认参数，两个 handler 都把 `bridgeBaseUrl` 透传进去
+- **`/history` 端点用 legacy `urlObj.query`**：`new URL()` 没有 `.query` 属性（只有 `url.parse()` 才有），导致访问 `q.task` 时抛 `Cannot read properties of undefined` → 500
+  - 改用 `urlObj.searchParams.get(...)` 与 `/analyze` 端点保持一致
+
+### 测试
+
+- 新增 `parseDiffs` 单测：完整解析 / 非法项过滤 / change_type 归一化 / bbox 尺度自适应（0~1 / 0~100 / 0~1000 三档）/ 条目上限 20
+- 新增 `parseVerifyObject` 单测：完整对象 / verdict 推导 / 字符串 passed 转 boolean / uncertain 强制 null / 缺对象向后兼容
+- 新增 `historySearch` 单测：无文件 / task 过滤 / keyword 模糊匹配 / 时间范围 / limit 上限
+- 新增 `search_history` 工具端到端测试：spawn bridge 子进程 → 调 /history → 验证 ok/total/returned/results 结构 + 进度通知；task 过滤参数回显
+- 总测试数 239 → 260，全部通过
+
+## [1.5.0] - 2026-08-17
+
+### 新增
+
+- **P0-1 多轮追问上下文自动继承**：bridge 端按图片 md5 维护「最近分析上下文」缓存（`imgContextCache`），同一张图第二轮带 `focus` / `crop_bbox` 追问时，自动把上一轮的 `{ task, keywords, regions, analysis 摘要 }` 注入到 prompt 的 `description` 里
+  - 触发条件：单图 + 有 focus 或 crop_bbox + 非 force_action + 距上次 < 1h
+  - 响应 meta 新增 `context_inherited: boolean`，标记本轮是否注入了上一轮上下文
+  - `buildInheritedContext(prevCtx)` 构造注入片段：keywords 取前 5 个、regions 取前 3 个、analysis 截断到 200 字符
+  - 用户不再需要在 `focus` 里重复交代「就是刚才那张图的 xxx 位置」——bridge 已自动告诉模型
+- **P0-2 阶段进度反馈（MCP notification）**：`analyze_image` 和 `locate_code` 工具 handler 接收 `extra` 参数，通过 `sendNotification` 向客户端推送 `notifications/message`（LoggingMessageNotification）
+  - `analyze_image` 在 4 个阶段发通知：准备分析 → 桥接就绪 → 调用视觉模型 → 分析完成/失败
+  - `locate_code` 在 2 个阶段发通知：正在搜索 → 搜索完成
+  - `makeProgressSender(extra)` 工具函数，notification 失败静默忽略，不阻塞主流程
+  - 兼容旧调用方式（不传 extra 也不崩溃）
+- **P1-1 `locate_code` MCP 新工具**：在项目代码里搜索关键词，返回结构化 `{ file, line, match }` 候选列表
+  - `createLocateCodeHandler()` 实现，搜索后端优先 ripgrep，回退 findstr（Windows）/ grep（其他）
+  - 参数：`keywords`（1~10 个）、`project_root`、`max_hits_per_keyword`（默认 5，上限 20）、`file_extensions`
+  - 注册到 `index.js`（stdio）和 `server-http.js`（HTTP）两个入口
+  - SKILL.md 第 3 节更新指引：优先用 `locate_code` 工具而非直接 grep；拿到候选后用 `Read` 工具读上下文判断；候选多时用 `task=verify` 二次确认
+
+### 测试
+
+- 新增 `imgContextCache` + `buildInheritedContext` 单测 7 项（基本读写 / LRU 淘汰 / 完整上下文构造 / 空 ctx / 缺 keywords/regions）
+- 新增 `mcp-tool.test.mjs`（10 项）：P0-2 进度通知（extra/sendNotification / 缺参数不发通知 / 无 extra 兼容）、P1-1 locate_code（缺参数 / 超限 / 搜索命中 / 搜索不命中 / 多关键词 / 自定义扩展名 / 进度通知）
+- 新增整合测试 1 项：P0-1 force_action 路径下 `context_inherited=false`（不写入 imgContextCache）
+- SKILL.md 新增 P0-1 上下文继承说明 + P1-1 locate_code 工具指引
+- 总测试数 222 → 239，全部通过
+
+## [1.4.2] - 2026-08-17
+
+### 新增
+
+- **P0-3 错误响应 `hint` 字段**：所有错误响应（4xx/5xx）补 `hint` 字段，根据 `errorType` 给出 Claude 直接念给用户的「可点击执行」下一步建议：
+  - `missing_path` / `file_not_found` / `too_many_images` / `payload_too_large` / `bad_json` / `images_empty` / `base64_invalid` / `rate_limited` / `bad_request` / `all_providers_failed` / `internal` / `unknown_endpoint`
+  - `buildHint(errorType, ctx)` 函数实现；ctx 透传 retryAfter / missing 路径 / images[index] 等上下文，让建议更精准
+  - 用户不再需要看错误码或翻文档，hint 直接告诉他「① 用「分析 E:\\路径\\截图.png」直接给路径；② 或先 Win+Shift+S 截图再说「分析最新一张截图」；③ 远程模式用 POST /analyze 传 images base64」
+- **P1-4 自动裁边 `autoCropBorder`**：单图（无 cropBbox、未切片）场景，bridge 自动用 `sharp.trim({ threshold: 12 })` 裁掉四周纯色边框（含任务栏/侧边栏/白边）
+  - 启发式：trim 后任一维度 < 原维度 30%（如全色图被裁到 1x1）→ 回退原 buffer，避免误伤
+  - 响应 meta 新增 `auto_cropped: boolean` 和 `auto_crop: { from: {w,h}, to: {w,h} }` 字段，让用户知道是否被裁过
+  - 用「维度百分比」而非「面积百分比」判断回退，避免「80x80 内容 + 20px 边框」这种正常裁剪被误判（面积比 0.44 看似过度裁剪实则正常）
+- **P2-3 `cost_info` 字段**：响应 meta 新增 `cost_info`，包含 `input_tokens / output_tokens / total_tokens / estimated_cost_usd / cache_saved_tokens / cache_saved_usd / price_per_1k_tokens`
+  - `PRICE_PER_1K_TOKENS` 常量（默认 $0.001，可用 env 覆盖）按 1k tokens 估算成本
+  - cache 改为存 `{ analysisRes, usage }` 对象，cache hit 时取出上次 usage，使 `cache_saved_tokens` 准确反映上次花费的 tokens
+  - 历史日志（`.claude-eyes/history.jsonl`）和 usage 日志同步记录 `cost_info` 与 `auto_cropped`
+
+### 修复
+
+- **`routeTaskByContext` 否定词误匹配**：`没有报错` / `no error` / `without diff` 等否定语境不再误切到对应 task
+  - 新增 `NEGATION_WORDS` 列表 + `hasNegationBefore(text, idx)` 函数
+  - 遍历所有关键词匹配位置，跳过紧邻否定词的匹配（如「没有报错」不切 error，「没对比过」不切 diff）
+  - 测试覆盖：3 项否定语境测试 + 肯定/否定混合测试
+
+### 测试
+
+- 新增 `autoCropBorder` 单测 5 项（带边框/无边框/小边框/无效输入/边界尺寸判断）
+- 新增 `buildHint` 单测 5 项（各 errorType 非空 / ctx 透传 / 未知 errorType 兜底）
+- 新增整合测试 9 项：
+  - P0-3 错误响应 hint 字段（缺 path / 不存在文件 / 404 / 非法 JSON）
+  - P2-3 成功响应 cost_info 字段（force_action 路径下全 0）
+  - P1-4 auto_cropped 字段（普通图 bool / 带边框图触发 true）
+- 整合/usage 测试版本号断言改为动态读 package.json（避免版本升级时回来改测试）
+- 总测试数 203 → 222，全部通过
+
 ## [1.4.1] - 2026-08-17
 
 ### 修复
